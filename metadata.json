@@ -1,0 +1,6 @@
+{
+  "name": "Capture Studio",
+  "description": "Ultra-low latency USB HDMI capture player for console gaming and camera preview",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
