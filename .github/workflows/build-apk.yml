@@ -22,11 +22,11 @@ jobs:
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
-        working-directory: Capture-Studio-main   # Change this if your folder name is different
+        working-directory: Capture-Studio-main/UT Capture-Studio-main
 
       - name: Build Debug APK
         run: ./gradlew assembleDebug
-        working-directory: Capture-Studio-main
+        working-directory: Capture-Studio-main/UT Capture-Studio-main
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
