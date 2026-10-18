@@ -59,6 +59,11 @@ data class UiState(
     val isAudioMuted: Boolean = false,
     val feedbackWarningVisible: Boolean = false,
     val errorMessage: String? = null,
+    val overlayUri: String? = null,
+    val overlayVisible: Boolean = false,
+    val overlayCx: Float = 0.5f,
+    val overlayCy: Float = 0.5f,
+    val overlayWidth: Float = 0.3f,
 
     // Wireless Feed Server State
     val feedServerIp: String = "127.0.0.1",
@@ -179,14 +184,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         registerAction(5, "Local Mon") {
             feedToggleLocalMonitor()
         }
-        registerAction(6, "Action 6") {
-            Log.i(TAG, "Button 6 custom trigger")
+        registerAction(6, "PNG Overlay") {
+            toggleOverlay()
         }
     }
 
     // Wireless Feed Control Server & UDP Audio Streamer
     private val audioStreamer = AudioStreamer(application)
     private var controlServer: ControlServer? = null
+
+    // Feed local-monitor state saved when a Remote starts listening, restored when it stops
+    private var localMonitorBeforeListen: Boolean? = null
 
     // Wireless Remote Client & Player
     private var controlClient: ControlClient? = null
@@ -241,7 +249,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 feedPin = savedPin,
                 remoteMonitorVolume = savedRemoteVol,
                 isRemoteListening = savedRemoteListen,
-                connectedFeedIp = prefs.getString(KEY_LAST_FEED_IP, null)
+                connectedFeedIp = prefs.getString(KEY_LAST_FEED_IP, null),
+                overlayUri = prefs.getString("pref_overlay_uri", null),
+                overlayVisible = prefs.getBoolean("pref_overlay_visible", false),
+                overlayCx = prefs.getFloat("pref_overlay_cx", 0.5f),
+                overlayCy = prefs.getFloat("pref_overlay_cy", 0.5f),
+                overlayWidth = prefs.getFloat("pref_overlay_w", 0.3f)
             )
         }
 
@@ -328,6 +341,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 override fun onRemoteDisconnected() {
                     _uiState.update { it.copy(isRemoteConnectedToFeed = false) }
                     audioStreamer.setStreamingEnabled(false)
+                    restoreLocalMonitor()
                 }
 
                 override fun onSetGain(source: String, value: Float) {
@@ -360,13 +374,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     } catch (_: Throwable) {
                     }
                     audioStreamer.setStreamingEnabled(true)
-                    // Auto-disable Feed local monitor to prevent acoustic echo
+                    // Auto-disable Feed local monitor to prevent acoustic echo (restored when listening stops)
+                    if (localMonitorBeforeListen == null) {
+                        localMonitorBeforeListen = audioCaptureEngine.isLocalMonitorEnabled()
+                    }
                     audioCaptureEngine.setLocalMonitorEnabled(false)
                     syncFeedStateToRemote()
                 }
 
                 override fun onAudioStopRequested() {
                     audioStreamer.setStreamingEnabled(false)
+                    restoreLocalMonitor()
                     syncFeedStateToRemote()
                 }
             }
@@ -391,6 +409,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             )
         }
+    }
+
+    private fun restoreLocalMonitor() {
+        localMonitorBeforeListen?.let { audioCaptureEngine.setLocalMonitorEnabled(it) }
+        localMonitorBeforeListen = null
+        syncFeedStateToRemote()
     }
 
     private fun stopControlServer() {
@@ -436,11 +460,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun feedToggleLocalMonitor() {
         val newLocal = !audioCaptureEngine.isLocalMonitorEnabled()
+        localMonitorBeforeListen = null
         audioCaptureEngine.setLocalMonitorEnabled(newLocal)
         syncFeedStateToRemote()
     }
 
     fun feedSetLocalMonitor(enabled: Boolean) {
+        localMonitorBeforeListen = null
         audioCaptureEngine.setLocalMonitorEnabled(enabled)
         syncFeedStateToRemote()
     }
@@ -758,6 +784,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         audioCaptureEngine.setMute(newMute)
         _uiState.update { it.copy(isAudioMuted = newMute) }
         prefs.edit().putBoolean(KEY_AUDIO_MUTED, newMute).apply()
+    }
+
+    // --- PNG overlay (Feed Player) ---
+    fun setOverlayImage(uri: String) {
+        prefs.edit().putString("pref_overlay_uri", uri).putBoolean("pref_overlay_visible", true).apply()
+        _uiState.update { it.copy(overlayUri = uri, overlayVisible = true) }
+    }
+
+    fun toggleOverlay() {
+        val visible = !_uiState.value.overlayVisible
+        prefs.edit().putBoolean("pref_overlay_visible", visible).apply()
+        _uiState.update { it.copy(overlayVisible = visible) }
+    }
+
+    fun saveOverlayTransform(cx: Float, cy: Float, width: Float) {
+        prefs.edit()
+            .putFloat("pref_overlay_cx", cx)
+            .putFloat("pref_overlay_cy", cy)
+            .putFloat("pref_overlay_w", width)
+            .apply()
+        _uiState.update { it.copy(overlayCx = cx, overlayCy = cy, overlayWidth = width) }
     }
 
     fun dismissFeedbackWarning() {
