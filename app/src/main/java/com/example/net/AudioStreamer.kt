@@ -23,9 +23,13 @@ class AudioStreamer(private val context: Context) {
     companion object {
         private const val TAG = "AudioStreamer"
         const val HEADER_SIZE = 12
-        const val PAYLOAD_SIZE = 1920 // 480 frames * 2 channels * 2 bytes = 1920 bytes (10ms at 48kHz)
+        const val FRAME_SHORTS = 960 // one 10 ms capture block: 480 frames * 2 channels
+        const val PACKET_SHORTS = 480 // each UDP packet carries 5 ms
+        const val PAYLOAD_SIZE = PACKET_SHORTS * 2 // 960 bytes
+        // 972 bytes total: safely under the ~1472 byte Wi-Fi/Ethernet UDP limit, so IP never fragments
+        // the datagram (a fragmented packet is lost if ANY fragment is lost, doubling the loss rate).
         const val PACKET_SIZE = HEADER_SIZE + PAYLOAD_SIZE
-        const val QUEUE_CAPACITY = 16
+        const val QUEUE_CAPACITY = 32
         const val FLAG_48K_STEREO = 0x0001
     }
 
@@ -41,7 +45,7 @@ class AudioStreamer(private val context: Context) {
     private val packetQueue = ArrayBlockingQueue<ByteArray>(QUEUE_CAPACITY)
 
     // Pre-allocated packet pool to avoid heap allocations in the audio thread
-    private val bufferPool = Array(QUEUE_CAPACITY + 2) { ByteArray(PACKET_SIZE) }
+    private val bufferPool = Array(QUEUE_CAPACITY + 4) { ByteArray(PACKET_SIZE) }
     private var poolIndex = 0
 
     private var sequenceNumber = 0L
@@ -102,18 +106,24 @@ class AudioStreamer(private val context: Context) {
      */
     fun sendPcmChunk(pcmData: ShortArray, shortsLength: Int, timestampMs: Long) {
         if (!isStreaming.get() || targetAddress == null) return
-        val bytesNeeded = shortsLength * 2
-        if (bytesNeeded != PAYLOAD_SIZE) return
+        if (shortsLength != FRAME_SHORTS) return
 
+        // Split the 10 ms block into two 5 ms packets
+        var offset = 0
+        var part = 0
+        while (offset < shortsLength) {
+            enqueuePacket(pcmData, offset, PACKET_SHORTS, timestampMs + part * 5L)
+            offset += PACKET_SHORTS
+            part++
+        }
+    }
+
+    private fun enqueuePacket(pcmData: ShortArray, startIndex: Int, count: Int, timestampMs: Long) {
         // Pick next pre-allocated buffer from pool
         val buffer = bufferPool[poolIndex]
         poolIndex = (poolIndex + 1) % bufferPool.size
 
-        // Write 12-byte header:
-        // [0..3]: uint32 sequence number (big-endian)
-        // [4..7]: uint32 timestamp ms
-        // [8..9]: uint16 flags
-        // [10..11]: uint16 reserved
+        // 12-byte header: [0..3] sequence, [4..7] timestamp ms, [8..9] flags, [10..11] reserved
         val seq = sequenceNumber++
         buffer[0] = ((seq shr 24) and 0xFF).toByte()
         buffer[1] = ((seq shr 16) and 0xFF).toByte()
@@ -130,17 +140,16 @@ class AudioStreamer(private val context: Context) {
         buffer[10] = 0
         buffer[11] = 0
 
-        // Copy PCM short data into bytes (little-endian PCM16)
+        // PCM16 little-endian
         var byteOffset = HEADER_SIZE
-        for (i in 0 until shortsLength) {
+        for (i in startIndex until startIndex + count) {
             val sample = pcmData[i].toInt()
             buffer[byteOffset++] = (sample and 0xFF).toByte()
             buffer[byteOffset++] = ((sample shr 8) and 0xFF).toByte()
         }
 
-        // Offer to queue (non-blocking; drop on overflow)
+        // Non-blocking offer; drop the oldest packet on overflow to keep latency low
         if (!packetQueue.offer(buffer)) {
-            // Queue full, drop packet to preserve low latency
             packetQueue.poll()
             packetQueue.offer(buffer)
         }
