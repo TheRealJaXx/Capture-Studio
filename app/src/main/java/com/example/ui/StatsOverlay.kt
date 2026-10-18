@@ -99,6 +99,15 @@ fun StatsOverlay(
                 value = "${stats.droppedFrames}",
                 warning = stats.droppedFrames > 0
             )
+            if (stats.audioStatus.isNotEmpty()) {
+                Text(
+                    text = stats.audioStatus,
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        color = Color(0xFFFBBF24),
+                        fontSize = 10.sp
+                    )
+                )
+            }
         }
     }
 }
