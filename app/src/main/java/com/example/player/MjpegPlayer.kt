@@ -289,6 +289,8 @@ class MjpegPlayer(
         }
     }
 
+    private var argbPixels = IntArray(1920 * 1080)
+
     private fun processAndRenderFrame(frame: FrameBuffer) {
         val now = System.currentTimeMillis()
         val frameTimestamp = frame.timestampMs
@@ -304,29 +306,69 @@ class MjpegPlayer(
             lastFpsTimestamp = now
         }
 
-        // Validate JPEG SOI
-        if (!JpegUtils.isJpeg(rawData, rawLen)) {
-            return
-        }
-
-        // Inject DHT if missing to prevent decode failure on cheap capture cards
-        val decodeData: ByteArray
-        val decodeLen: Int
-        if (!JpegUtils.hasHuffmanTable(rawData, rawLen)) {
-            decodeLen = JpegUtils.injectHuffmanTable(rawData, rawLen, dhtBuffer)
-            decodeData = dhtBuffer
-        } else {
-            decodeData = rawData
-            decodeLen = rawLen
-        }
-
-        // Zero-allocation decoding using inBitmap
         val decodeStart = System.currentTimeMillis()
-        val decoded = try {
-            BitmapFactory.decodeByteArray(decodeData, 0, decodeLen, bitmapOptions)
-        } catch (e: Throwable) {
-            Log.e(TAG, "BitmapFactory decode failed: ${e.message}")
-            null
+        var decoded: Bitmap? = null
+
+        val soiIndex = JpegUtils.findJpegStartIndex(rawData, rawLen)
+        if (soiIndex >= 0) {
+            val jpegOffset = soiIndex
+            val jpegLen = rawLen - soiIndex
+
+            val decodeData: ByteArray
+            val decodeOffset: Int
+            val decodeLen: Int
+
+            if (!JpegUtils.hasHuffmanTable(rawData, jpegOffset, jpegLen)) {
+                val injectedLen = JpegUtils.injectHuffmanTable(rawData, jpegOffset, jpegLen, dhtBuffer)
+                decodeData = dhtBuffer
+                decodeOffset = 0
+                decodeLen = injectedLen
+            } else {
+                decodeData = rawData
+                decodeOffset = jpegOffset
+                decodeLen = jpegLen
+            }
+
+            // Attempt fast zero-allocation inBitmap decode
+            decoded = try {
+                BitmapFactory.decodeByteArray(decodeData, decodeOffset, decodeLen, bitmapOptions)
+            } catch (e: Throwable) {
+                null
+            }
+
+            // Fallback: decode without inBitmap if size mismatch or initial configuration
+            if (decoded == null) {
+                val fallbackOpts = BitmapFactory.Options().apply {
+                    inPreferredConfig = Bitmap.Config.ARGB_8888
+                }
+                decoded = try {
+                    BitmapFactory.decodeByteArray(decodeData, decodeOffset, decodeLen, fallbackOpts)
+                } catch (e: Throwable) {
+                    Log.w(TAG, "BitmapFactory fallback decode failed: ${e.message}")
+                    null
+                }
+                if (decoded != null) {
+                    updateReusableBitmap(decoded.width, decoded.height)
+                }
+            }
+        } else if (rawLen >= frameWidth * frameHeight * 2) {
+            // Uncompressed YUYV format from card
+            val w = frameWidth
+            val h = frameHeight
+            val pixelCount = w * h
+            if (argbPixels.size < pixelCount) {
+                argbPixels = IntArray(pixelCount)
+            }
+            JpegUtils.decodeYuyvToArgb(rawData, 0, w, h, argbPixels)
+            var bmp = reusableBitmap
+            if (bmp == null || bmp.width != w || bmp.height != h) {
+                updateReusableBitmap(w, h)
+                bmp = reusableBitmap
+            }
+            if (bmp != null) {
+                bmp.setPixels(argbPixels, 0, w, 0, 0, w, h)
+                decoded = bmp
+            }
         }
 
         val decodeEnd = System.currentTimeMillis()
@@ -355,31 +397,37 @@ class MjpegPlayer(
     }
 
     private fun renderToSurface(bitmap: Bitmap, surface: Surface) {
-        val holder = activeSurfaceHolder ?: return
-        var canvas = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            try {
-                surface.lockHardwareCanvas()
-            } catch (e: Throwable) {
+        if (!surface.isValid) return
+
+        var canvas: android.graphics.Canvas? = null
+        try {
+            canvas = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 try {
-                    holder.lockCanvas()
+                    surface.lockHardwareCanvas()
+                } catch (_: Throwable) {
+                    try {
+                        surface.lockCanvas(null)
+                    } catch (_: Throwable) {
+                        null
+                    }
+                }
+            } else {
+                try {
+                    surface.lockCanvas(null)
                 } catch (_: Throwable) {
                     null
                 }
             }
-        } else {
-            try {
-                holder.lockCanvas()
-            } catch (_: Throwable) {
-                null
-            }
-        }
 
-        if (canvas != null) {
-            try {
+            if (canvas != null) {
                 // Clear letterbox / background
                 canvas.drawColor(Color.BLACK, PorterDuff.Mode.SRC)
                 canvas.drawBitmap(bitmap, srcRect, dstRect, paint)
-            } finally {
+            }
+        } catch (e: Throwable) {
+            Log.w(TAG, "Canvas rendering failed: ${e.message}")
+        } finally {
+            if (canvas != null) {
                 try {
                     surface.unlockCanvasAndPost(canvas)
                 } catch (e: Throwable) {

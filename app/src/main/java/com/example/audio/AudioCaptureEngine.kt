@@ -13,8 +13,12 @@ import android.media.MediaRecorder
 import android.os.Build
 import android.os.Process
 import android.util.Log
+import com.example.net.AudioStreamer
+import com.example.net.Protocol
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
+import kotlin.math.log10
+import kotlin.math.sqrt
 
 data class AudioInputDevice(
     val id: Int,
@@ -26,13 +30,16 @@ data class AudioInputDevice(
 )
 
 /**
- * Ultra-low-latency audio monitor connecting HDMI USB capture audio (or microphone) to AudioTrack.
+ * Ultra-low-latency audio monitor connecting HDMI USB capture audio and device microphone
+ * to local AudioTrack and wireless UDP AudioStreamer.
  * Features:
- * - Enumerates audio inputs, defaults to USB capture card
- * - Performance mode: AudioTrack.PERFORMANCE_MODE_LOW_LATENCY
- * - Howl-round warning and auto-mute when phone microphone is chosen
- * - Acoustic anti-feedback guard: auto-mutes on sustained saturation/howling
- * - Reacts dynamically to USB audio connection/disconnection
+ * - Dual logical channels: "capture" (USB capture card) and "mic" (device mic)
+ * - Separate gain and mute controls per channel
+ * - Zero-allocation RMS and peak calculation in dBFS (floor -60 dBFS)
+ * - Graceful fallback if secondary mic AudioRecord cannot open
+ * - Local monitor toggle (mutes Feed-side speaker without affecting stream or meters)
+ * - Low-latency pass-through to AudioStreamer UDP socket
+ * - Acoustic anti-feedback / howl-round protection
  */
 class AudioCaptureEngine(
     private val context: Context,
@@ -51,12 +58,36 @@ class AudioCaptureEngine(
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
     private var audioRecord: AudioRecord? = null
+    private var micRecord: AudioRecord? = null
     private var audioTrack: AudioTrack? = null
     private var audioThread: Thread? = null
 
     private val isRunning = AtomicBoolean(false)
+
+    // Master volume & mute (Feed UI)
     private var isMuted = false
     private var currentVolume = 1.0f // 0.0 to 1.0
+
+    // Dual channel controls
+    @Volatile
+    private var captureGain = 1.0f
+    @Volatile
+    private var captureMuted = false
+
+    @Volatile
+    private var micGain = 1.0f
+    @Volatile
+    private var micMuted = false
+
+    @Volatile
+    private var micAvailable = true
+
+    @Volatile
+    private var localMonitorEnabled = true
+
+    // External listener for 20 Hz meters & UDP audio streamer tap
+    var onMetersCalculated: ((mic: Protocol.SourceMeter, capture: Protocol.SourceMeter) -> Unit)? = null
+    var audioStreamer: AudioStreamer? = null
 
     private var selectedDevice: AudioInputDevice? = null
     private var availableDevices: List<AudioInputDevice> = emptyList()
@@ -159,6 +190,7 @@ class AudioCaptureEngine(
         restartAudioPipeline()
     }
 
+    // Master controls
     fun setMute(muted: Boolean) {
         isMuted = muted
     }
@@ -170,6 +202,40 @@ class AudioCaptureEngine(
     }
 
     fun getVolume(): Float = currentVolume
+
+    // Dual channel gain & mute controls
+    fun setCaptureGain(gain: Float) {
+        captureGain = gain.coerceIn(0f, 1f)
+    }
+
+    fun getCaptureGain(): Float = captureGain
+
+    fun setCaptureMuted(muted: Boolean) {
+        captureMuted = muted
+    }
+
+    fun isCaptureMuted(): Boolean = captureMuted
+
+    fun setMicGain(gain: Float) {
+        micGain = gain.coerceIn(0f, 1f)
+    }
+
+    fun getMicGain(): Float = micGain
+
+    fun setMicMuted(muted: Boolean) {
+        micMuted = muted
+    }
+
+    fun isMicMuted(): Boolean = micMuted
+
+    fun isMicAvailable(): Boolean = micAvailable
+
+    fun setLocalMonitorEnabled(enabled: Boolean) {
+        localMonitorEnabled = enabled
+        Log.i(TAG, "Local monitor enabled set to: $enabled")
+    }
+
+    fun isLocalMonitorEnabled(): Boolean = localMonitorEnabled
 
     @SuppressLint("MissingPermission")
     private fun restartAudioPipeline() {
@@ -204,6 +270,7 @@ class AudioCaptureEngine(
         val recBufferSize = (minRecBuf * 2).coerceAtLeast(1920)
         val trackBufferSize = (minTrackBuf * 2).coerceAtLeast(1920)
 
+        // 1. Primary Capture AudioRecord
         val record = try {
             val builder = AudioRecord.Builder()
                 .setAudioSource(MediaRecorder.AudioSource.MIC)
@@ -220,11 +287,48 @@ class AudioCaptureEngine(
             rec.setPreferredDevice(inputDev.rawDevice)
             rec
         } catch (e: Throwable) {
-            Log.e(TAG, "Failed to create AudioRecord: ${e.message}")
+            Log.e(TAG, "Failed to create primary AudioRecord: ${e.message}")
             onError("Audio input init failed: ${e.message}")
             return
         }
 
+        // 2. Secondary Mic AudioRecord (Try capturing built-in mic simultaneously)
+        var secondaryMicRecord: AudioRecord? = null
+        val builtInMicDevice = availableDevices.find { it.isBuiltInMic }?.rawDevice
+        if (inputDev.isUsb && builtInMicDevice != null) {
+            try {
+                val micRec = AudioRecord.Builder()
+                    .setAudioSource(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
+                    .setAudioFormat(
+                        AudioFormat.Builder()
+                            .setEncoding(encoding)
+                            .setSampleRate(SAMPLE_RATE)
+                            .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
+                            .build()
+                    )
+                    .setBufferSizeInBytes(recBufferSize)
+                    .build()
+
+                micRec.setPreferredDevice(builtInMicDevice)
+                micRec.startRecording()
+                if (micRec.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                    secondaryMicRecord = micRec
+                    micAvailable = true
+                    Log.i(TAG, "Secondary device microphone AudioRecord opened successfully")
+                } else {
+                    micRec.release()
+                    micAvailable = false
+                    Log.w(TAG, "Secondary mic not recording, fallback to single source")
+                }
+            } catch (e: Throwable) {
+                Log.w(TAG, "Secondary mic recording not supported on this device: ${e.message}")
+                micAvailable = false
+            }
+        } else {
+            micAvailable = !inputDev.isUsb
+        }
+
+        // 3. AudioTrack for local monitoring
         val track = try {
             val attr = AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -250,12 +354,14 @@ class AudioCaptureEngine(
             trackBuilder.build()
         } catch (e: Throwable) {
             record.release()
+            secondaryMicRecord?.release()
             Log.e(TAG, "Failed to create AudioTrack: ${e.message}")
             onError("Audio monitor init failed: ${e.message}")
             return
         }
 
         audioRecord = record
+        micRecord = secondaryMicRecord
         audioTrack = track
 
         try {
@@ -264,12 +370,17 @@ class AudioCaptureEngine(
         } catch (e: Throwable) {
             Log.e(TAG, "Failed to start AudioRecord or AudioTrack: ${e.message}")
             record.release()
+            secondaryMicRecord?.release()
             track.release()
             return
         }
 
-        val bufferSize = 960 // ~10ms at 48kHz stereo 16-bit
+        val bufferSize = 960 // 10ms at 48kHz stereo 16-bit
         val pcmBuffer = ShortArray(bufferSize)
+        val micBuffer = ShortArray(bufferSize / 2)
+        val playbackBuffer = ShortArray(bufferSize)
+
+        var meterBlockCount = 0
 
         Log.d(TAG, "Audio monitoring pipeline running at $SAMPLE_RATE Hz (Device: ${inputDev.name})")
 
@@ -277,19 +388,22 @@ class AudioCaptureEngine(
             val shortsRead = record.read(pcmBuffer, 0, pcmBuffer.size)
             if (shortsRead <= 0) continue
 
-            // Anti-feedback guard analysis
-            var maxPeak = 0
+            val now = System.currentTimeMillis()
+
+            // 1. Calculate raw Capture peak & RMS for metering
+            var capPeakShort = 0
+            var capSumSquares = 0.0
             for (i in 0 until shortsRead) {
-                val absVal = abs(pcmBuffer[i].toInt())
-                if (absVal > maxPeak) {
-                    maxPeak = absVal
-                }
+                val s = pcmBuffer[i].toInt()
+                val absS = abs(s)
+                if (absS > capPeakShort) capPeakShort = absS
+                capSumSquares += s.toDouble() * s.toDouble()
             }
 
-            if (maxPeak >= FEEDBACK_THRESHOLD) {
+            // Anti-feedback guard analysis
+            if (capPeakShort >= FEEDBACK_THRESHOLD) {
                 feedbackTriggerCount++
                 if (feedbackTriggerCount >= FEEDBACK_CONSECUTIVE_FRAMES) {
-                    // Acoustic howl-round detected! Auto-mute to protect user's ears
                     Log.w(TAG, "Acoustic feedback howl-round detected! Auto-muting audio.")
                     isMuted = true
                     feedbackTriggerCount = 0
@@ -299,22 +413,80 @@ class AudioCaptureEngine(
                 feedbackTriggerCount = 0
             }
 
-            if (isMuted || currentVolume <= 0.001f) {
-                // Zero out buffer so monitor is silent
-                pcmBuffer.fill(0)
-            } else if (currentVolume < 0.99f) {
-                // Apply volume scale without clipping
-                for (i in 0 until shortsRead) {
-                    pcmBuffer[i] = (pcmBuffer[i] * currentVolume).toInt().coerceIn(-32768, 32767).toShort()
+            // Calculate Capture dBFS
+            val capPeakDb = if (capPeakShort > 0) {
+                (20.0 * log10(capPeakShort / 32768.0)).toFloat().coerceIn(-60f, 0f)
+            } else -60f
+
+            val capRmsDb = if (shortsRead > 0) {
+                val rms = sqrt(capSumSquares / shortsRead)
+                if (rms > 0) (20.0 * log10(rms / 32768.0)).toFloat().coerceIn(-60f, 0f) else -60f
+            } else -60f
+
+            // 2. Read secondary mic if open
+            var micPeakDb = -60f
+            var micRmsDb = -60f
+            if (secondaryMicRecord != null && micAvailable) {
+                val micShorts = secondaryMicRecord.read(micBuffer, 0, micBuffer.size)
+                if (micShorts > 0) {
+                    var mPeak = 0
+                    var mSum = 0.0
+                    for (i in 0 until micShorts) {
+                        val s = micBuffer[i].toInt()
+                        val absS = abs(s)
+                        if (absS > mPeak) mPeak = absS
+                        mSum += s.toDouble() * s.toDouble()
+                    }
+                    micPeakDb = if (mPeak > 0) (20.0 * log10(mPeak / 32768.0)).toFloat().coerceIn(-60f, 0f) else -60f
+                    micRmsDb = if (micShorts > 0) {
+                        val rms = sqrt(mSum / micShorts)
+                        if (rms > 0) (20.0 * log10(rms / 32768.0)).toFloat().coerceIn(-60f, 0f) else -60f
+                    } else -60f
+                }
+            } else if (!inputDev.isUsb) {
+                // If primary device is built-in mic itself
+                micPeakDb = capPeakDb
+                micRmsDb = capRmsDb
+            }
+
+            // 3. Publish meters at ~20 Hz (every 5 blocks of 10ms = 50ms)
+            meterBlockCount++
+            if (meterBlockCount >= 5) {
+                meterBlockCount = 0
+                onMetersCalculated?.invoke(
+                    Protocol.SourceMeter(micRmsDb, micPeakDb),
+                    Protocol.SourceMeter(capRmsDb, capPeakDb)
+                )
+            }
+
+            // 4. Apply Capture Gain & Mute for Streamer & Playback
+            val effectiveCaptureGain = if (isMuted || captureMuted) 0f else (captureGain * currentVolume)
+            for (i in 0 until shortsRead) {
+                if (effectiveCaptureGain <= 0.001f) {
+                    pcmBuffer[i] = 0
+                } else if (effectiveCaptureGain < 0.99f || effectiveCaptureGain > 1.01f) {
+                    pcmBuffer[i] = (pcmBuffer[i] * effectiveCaptureGain).toInt().coerceIn(-32768, 32767).toShort()
                 }
             }
 
-            track.write(pcmBuffer, 0, shortsRead)
+            // 5. Send to UDP AudioStreamer (Stage 5) - captures card audio only, never mic
+            audioStreamer?.sendPcmChunk(pcmBuffer, shortsRead, now)
+
+            // 6. Local Monitor Output on Feed
+            if (!localMonitorEnabled || isMuted || currentVolume <= 0.001f) {
+                playbackBuffer.fill(0)
+            } else {
+                System.arraycopy(pcmBuffer, 0, playbackBuffer, 0, shortsRead)
+            }
+
+            track.write(playbackBuffer, 0, shortsRead)
         }
 
         try {
             record.stop()
             record.release()
+            secondaryMicRecord?.stop()
+            secondaryMicRecord?.release()
             track.stop()
             track.release()
         } catch (e: Throwable) {

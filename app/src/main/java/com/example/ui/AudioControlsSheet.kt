@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Speaker
 import androidx.compose.material.icons.filled.Usb
 import androidx.compose.material.icons.filled.VolumeMute
 import androidx.compose.material.icons.filled.VolumeUp
@@ -36,6 +37,8 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -56,9 +59,11 @@ fun AudioControlsSheet(
     selectedDevice: AudioInputDevice?,
     volume: Float,
     isMuted: Boolean,
+    localMonitorEnabled: Boolean = true,
     onSelectDevice: (AudioInputDevice) -> Unit,
     onVolumeChange: (Float) -> Unit,
     onToggleMute: () -> Unit,
+    onToggleLocalMonitor: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -171,9 +176,55 @@ fun AudioControlsSheet(
                             .testTag("volume_slider")
                     )
 
+                    // Local Monitor Toggle Row
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp)
+                            .clickable { onToggleLocalMonitor() },
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Speaker,
+                                contentDescription = null,
+                                tint = if (localMonitorEnabled) Color(0xFF60A5FA) else Color(0xFF64748B),
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text(
+                                    text = "Feed Local Monitor",
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        color = Color.White,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                )
+                                Text(
+                                    text = if (localMonitorEnabled) "Playing through phone speaker" else "Muted locally (wireless stream active)",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        color = Color(0xFF94A3B8),
+                                        fontSize = 11.sp
+                                    )
+                                )
+                            }
+                        }
+
+                        Switch(
+                            checked = localMonitorEnabled,
+                            onCheckedChange = { onToggleLocalMonitor() },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color(0xFF60A5FA),
+                                checkedTrackColor = Color(0xFF1E3A8A)
+                            ),
+                            modifier = Modifier.testTag("local_monitor_toggle")
+                        )
+                    }
+
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(top = 2.dp)
+                        modifier = Modifier.padding(top = 8.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.Security,

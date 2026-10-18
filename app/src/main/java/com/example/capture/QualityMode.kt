@@ -1,5 +1,7 @@
 package com.example.capture
 
+import com.serenegiant.usb.Size
+
 data class QualityMode(
     val id: String,
     val label: String,
@@ -7,7 +9,8 @@ data class QualityMode(
     val targetHeight: Int,
     val targetFps: Int,
     val isSupportedByCard: Boolean = true,
-    val reasonUnsupported: String? = null
+    val reasonUnsupported: String? = null,
+    val cardRawSize: Size? = null
 ) {
     companion object {
         const val ID_720P_60 = "720p60"

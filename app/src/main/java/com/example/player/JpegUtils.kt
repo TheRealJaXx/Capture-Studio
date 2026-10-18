@@ -89,17 +89,30 @@ object JpegUtils {
      * Checks if data starts with JPEG Start Of Image (0xFF, 0xD8).
      */
     fun isJpeg(data: ByteArray, length: Int): Boolean {
-        return length >= 4 &&
-                (data[0].toInt() and 0xFF) == 0xFF &&
-                (data[1].toInt() and 0xFF) == 0xD8
+        return findJpegStartIndex(data, length) == 0
+    }
+
+    /**
+     * Scans the first 64 bytes for SOI (0xFF, 0xD8) to tolerate capture cards
+     * or drivers that prepend UVC payload headers or padding.
+     * @return index of 0xFF in data, or -1 if not found
+     */
+    fun findJpegStartIndex(data: ByteArray, length: Int): Int {
+        val limit = length.coerceAtMost(64) - 1
+        for (i in 0..limit) {
+            if ((data[i].toInt() and 0xFF) == 0xFF && (data[i + 1].toInt() and 0xFF) == 0xD8) {
+                return i
+            }
+        }
+        return -1
     }
 
     /**
      * Quick scan to determine if the JPEG data contains a DHT marker (0xFF, 0xC4).
      */
-    fun hasHuffmanTable(data: ByteArray, length: Int): Boolean {
-        var i = 2
-        val max = length - 2
+    fun hasHuffmanTable(data: ByteArray, offset: Int, length: Int): Boolean {
+        var i = offset + 2
+        val max = offset + length - 2
         while (i < max) {
             if ((data[i].toInt() and 0xFF) == 0xFF) {
                 val marker = data[i + 1].toInt() and 0xFF
@@ -111,7 +124,7 @@ object JpegUtils {
                 }
                 if (marker in 0xD0..0xD7 || marker == 0x00 || marker == 0xFF) {
                     i++
-                } else if (i + 3 < length) {
+                } else if (i + 3 < offset + length) {
                     val segLen = ((data[i + 2].toInt() and 0xFF) shl 8) or (data[i + 3].toInt() and 0xFF)
                     i += 2 + segLen
                 } else {
@@ -124,6 +137,10 @@ object JpegUtils {
         return false
     }
 
+    fun hasHuffmanTable(data: ByteArray, length: Int): Boolean {
+        return hasHuffmanTable(data, 0, length)
+    }
+
     /**
      * Injects baseline Huffman table directly after SOI into the destination buffer
      * without generating heap allocations.
@@ -131,13 +148,14 @@ object JpegUtils {
      */
     fun injectHuffmanTable(
         src: ByteArray,
+        srcOffset: Int,
         srcLen: Int,
         dest: ByteArray
     ): Int {
         if (srcLen < 2) return 0
         // Copy SOI (2 bytes)
-        dest[0] = src[0]
-        dest[1] = src[1]
+        dest[0] = src[srcOffset]
+        dest[1] = src[srcOffset + 1]
 
         // Copy standard DHT
         val dhtLen = STANDARD_DHT.size
@@ -145,7 +163,57 @@ object JpegUtils {
 
         // Copy remaining JPEG bytes
         val remaining = srcLen - 2
-        System.arraycopy(src, 2, dest, 2 + dhtLen, remaining)
+        System.arraycopy(src, srcOffset + 2, dest, 2 + dhtLen, remaining)
         return 2 + dhtLen + remaining
+    }
+
+    fun injectHuffmanTable(
+        src: ByteArray,
+        srcLen: Int,
+        dest: ByteArray
+    ): Int {
+        return injectHuffmanTable(src, 0, srcLen, dest)
+    }
+
+    /**
+     * Fast zero-allocation YUYV (YUY2 4:2:2 uncompressed) to ARGB32 conversion.
+     * Handles cards operating in uncompressed mode.
+     */
+    fun decodeYuyvToArgb(
+        yuyv: ByteArray,
+        offset: Int,
+        width: Int,
+        height: Int,
+        outArgb: IntArray
+    ) {
+        val totalPixels = width * height
+        val maxPairs = totalPixels / 2
+        var srcIdx = offset
+        var dstIdx = 0
+
+        for (i in 0 until maxPairs) {
+            val y0 = yuyv[srcIdx].toInt() and 0xFF
+            val u = (yuyv[srcIdx + 1].toInt() and 0xFF) - 128
+            val y1 = yuyv[srcIdx + 2].toInt() and 0xFF
+            val v = (yuyv[srcIdx + 3].toInt() and 0xFF) - 128
+            srcIdx += 4
+
+            // Pre-calculate color diffs
+            val rDiff = (359 * v) shr 8
+            val gDiff = (88 * u + 183 * v) shr 8
+            val bDiff = (454 * u) shr 8
+
+            // Pixel 1
+            val r0 = (y0 + rDiff).coerceIn(0, 255)
+            val g0 = (y0 - gDiff).coerceIn(0, 255)
+            val b0 = (y0 + bDiff).coerceIn(0, 255)
+            outArgb[dstIdx++] = (0xFF shl 24) or (r0 shl 16) or (g0 shl 8) or b0
+
+            // Pixel 2
+            val r1 = (y1 + rDiff).coerceIn(0, 255)
+            val g1 = (y1 - gDiff).coerceIn(0, 255)
+            val b1 = (y1 + bDiff).coerceIn(0, 255)
+            outArgb[dstIdx++] = (0xFF shl 24) or (r1 shl 16) or (g1 shl 8) or b1
+        }
     }
 }

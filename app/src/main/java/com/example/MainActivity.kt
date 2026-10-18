@@ -22,6 +22,8 @@ import com.example.ui.ConnectScreen
 import com.example.ui.CurrentScreen
 import com.example.ui.MainViewModel
 import com.example.ui.PlayerScreen
+import com.example.ui.RemoteScreen
+import com.example.ui.StartScreen
 import com.example.ui.theme.MyApplicationTheme
 
 class MainActivity : ComponentActivity() {
@@ -66,6 +68,17 @@ class MainActivity : ComponentActivity() {
                     }
 
                     when (uiState.currentScreen) {
+                        CurrentScreen.START -> {
+                            StartScreen(
+                                onSelectFeed = {
+                                    viewModel.selectFeedMode()
+                                },
+                                onSelectRemote = {
+                                    viewModel.selectRemoteMode()
+                                }
+                            )
+                        }
+
                         CurrentScreen.CONNECT -> {
                             ConnectScreen(
                                 attachedDevice = uiState.attachedDevice,
@@ -86,6 +99,7 @@ class MainActivity : ComponentActivity() {
 
                         CurrentScreen.PLAYER -> {
                             PlayerScreen(
+                                uvcCaptureEngine = viewModel.uvcCaptureEngine,
                                 mjpegPlayer = viewModel.mjpegPlayer,
                                 stats = uiState.playerStats,
                                 currentQualityMode = uiState.currentQualityMode,
@@ -96,6 +110,10 @@ class MainActivity : ComponentActivity() {
                                 selectedAudioDevice = uiState.selectedAudioDevice,
                                 audioVolume = uiState.audioVolume,
                                 isAudioMuted = uiState.isAudioMuted,
+                                localMonitorEnabled = uiState.feedState.localMonitor,
+                                feedServerIp = uiState.feedServerIp,
+                                feedPin = uiState.feedPin,
+                                isRemoteConnected = uiState.isRemoteConnectedToFeed,
                                 feedbackWarningVisible = uiState.feedbackWarningVisible,
                                 onSelectQualityMode = { mode ->
                                     viewModel.selectQualityMode(mode)
@@ -115,11 +133,53 @@ class MainActivity : ComponentActivity() {
                                 onToggleAudioMute = {
                                     viewModel.toggleAudioMute()
                                 },
+                                onToggleLocalMonitor = {
+                                    viewModel.feedToggleLocalMonitor()
+                                },
                                 onDismissFeedbackWarning = {
                                     viewModel.dismissFeedbackWarning()
                                 },
                                 onNavigateBack = {
                                     viewModel.navigateToConnect()
+                                }
+                            )
+                        }
+
+                        CurrentScreen.REMOTE -> {
+                            RemoteScreen(
+                                connectionStatus = uiState.remoteConnectionStatus,
+                                discoveredFeeds = uiState.discoveredFeeds,
+                                connectedFeedIp = uiState.connectedFeedIp,
+                                latencyMs = uiState.remoteLatencyMs,
+                                feedState = uiState.feedState,
+                                micMeter = uiState.remoteMicMeter,
+                                captureMeter = uiState.remoteCaptureMeter,
+                                audioStats = uiState.remoteAudioStats,
+                                isListening = uiState.isRemoteListening,
+                                monitorVolume = uiState.remoteMonitorVolume,
+                                onSetGain = { src, v ->
+                                    viewModel.remoteSetGain(src, v)
+                                },
+                                onSetMute = { src, muted ->
+                                    viewModel.remoteSetMute(src, muted)
+                                },
+                                onButtonClick = { id ->
+                                    viewModel.remoteButtonClick(id)
+                                },
+                                onToggleListen = {
+                                    viewModel.remoteToggleListen()
+                                },
+                                onSetMonitorVolume = { vol ->
+                                    viewModel.remoteSetMonitorVolume(vol)
+                                },
+                                onConnectToFeed = { ip, pin ->
+                                    viewModel.remoteConnect(ip, pin)
+                                },
+                                onReconnect = {
+                                    viewModel.remoteReconnect()
+                                },
+                                onNavigateBack = {
+                                    viewModel.navigateToStart()
                                 }
                             )
                         }

@@ -35,10 +35,12 @@ import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FitScreen
 import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.VolumeMute
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -61,6 +63,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -70,6 +73,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.example.audio.AudioInputDevice
 import com.example.capture.QualityMode
+import com.example.capture.UvcCaptureEngine
 import com.example.player.MjpegPlayer
 import com.example.player.PlayerStats
 import com.example.player.ScaleMode
@@ -77,6 +81,7 @@ import kotlinx.coroutines.delay
 
 @Composable
 fun PlayerScreen(
+    uvcCaptureEngine: UvcCaptureEngine,
     mjpegPlayer: MjpegPlayer,
     stats: PlayerStats,
     currentQualityMode: QualityMode,
@@ -87,6 +92,10 @@ fun PlayerScreen(
     selectedAudioDevice: AudioInputDevice?,
     audioVolume: Float,
     isAudioMuted: Boolean,
+    localMonitorEnabled: Boolean,
+    feedServerIp: String,
+    feedPin: String,
+    isRemoteConnected: Boolean,
     feedbackWarningVisible: Boolean,
     onSelectQualityMode: (QualityMode) -> Unit,
     onToggleScaleMode: () -> Unit,
@@ -94,6 +103,7 @@ fun PlayerScreen(
     onSelectAudioDevice: (AudioInputDevice) -> Unit,
     onAudioVolumeChange: (Float) -> Unit,
     onToggleAudioMute: () -> Unit,
+    onToggleLocalMonitor: () -> Unit,
     onDismissFeedbackWarning: () -> Unit,
     onNavigateBack: () -> Unit
 ) {
@@ -150,7 +160,7 @@ fun PlayerScreen(
                 userTouchTimestamp = System.currentTimeMillis()
             }
     ) {
-        // SurfaceView directly connected to MjpegPlayer
+        // SurfaceView directly connected to both UVCCamera native display and MjpegPlayer
         AndroidView(
             factory = { ctx ->
                 SurfaceView(ctx).apply {
@@ -228,7 +238,7 @@ fun PlayerScreen(
                             )
                         }
 
-                        Spacer(modifier = Modifier.width(12.dp))
+                        Spacer(modifier = Modifier.width(10.dp))
 
                         // Current Mode Pill
                         Surface(
@@ -241,7 +251,7 @@ fun PlayerScreen(
                             }
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Icon(
@@ -256,6 +266,40 @@ fun PlayerScreen(
                                     style = MaterialTheme.typography.labelMedium.copy(
                                         color = Color.White,
                                         fontWeight = FontWeight.Bold
+                                    )
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.width(8.dp))
+
+                        // Wireless Feed Server IP & PIN Pill
+                        Surface(
+                            color = Color(0xFF161B28).copy(alpha = 0.9f),
+                            shape = RoundedCornerShape(20.dp),
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.dp,
+                                if (isRemoteConnected) Color(0xFF10B981) else Color(0xFF475569)
+                            )
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Wifi,
+                                    contentDescription = null,
+                                    tint = if (isRemoteConnected) Color(0xFF34D399) else Color(0xFF94A3B8),
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "$feedServerIp  PIN:$feedPin",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        color = Color(0xFFE2E8F0),
+                                        fontFamily = FontFamily.Monospace,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 11.sp
                                     )
                                 )
                             }
@@ -465,16 +509,18 @@ fun PlayerScreen(
             )
         }
 
-        // Audio Sheet
+        // Audio Sheet with Local Monitor toggle
         if (showAudioSheet) {
             AudioControlsSheet(
                 devices = availableAudioDevices,
                 selectedDevice = selectedAudioDevice,
                 volume = audioVolume,
                 isMuted = isAudioMuted,
+                localMonitorEnabled = localMonitorEnabled,
                 onSelectDevice = onSelectAudioDevice,
                 onVolumeChange = onAudioVolumeChange,
                 onToggleMute = onToggleAudioMute,
+                onToggleLocalMonitor = onToggleLocalMonitor,
                 onDismiss = {
                     showAudioSheet = false
                     userTouchTimestamp = System.currentTimeMillis()
