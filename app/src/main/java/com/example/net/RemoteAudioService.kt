@@ -8,53 +8,51 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.example.MainActivity
 
 /**
- * Foreground Service for background audio streaming playback on Remote.
+ * Foreground service that only keeps the app process alive (and shows a notification) while the
+ * Remote is listening. The actual audio player lives in MainViewModel, so there is exactly one player.
  */
 class RemoteAudioService : Service() {
     companion object {
         const val CHANNEL_ID = "capture_remote_audio_channel"
-        const val NOTIFICATION_ID = 45455
+        const val NOTIFICATION_ID = 45456
 
         const val ACTION_START = "com.example.net.action.START"
         const val ACTION_STOP = "com.example.net.action.STOP"
 
-        const val EXTRA_HOST = "extra_host"
-        const val EXTRA_TOKEN = "extra_token"
+        @Volatile
+        private var running = false
 
         fun startStreaming(context: Context, host: String, token: String) {
-            val intent = Intent(context, RemoteAudioService::class.java).apply {
-                action = ACTION_START
-                putExtra(EXTRA_HOST, host)
-                putExtra(EXTRA_TOKEN, token)
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
+            try {
+                val intent = Intent(context, RemoteAudioService::class.java).apply {
+                    action = ACTION_START
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (_: Throwable) {
+                // Background keep-alive is optional; never let it take the app down
             }
         }
 
         fun stopStreaming(context: Context) {
-            val intent = Intent(context, RemoteAudioService::class.java).apply {
-                action = ACTION_STOP
+            // Only talk to the service if it is actually running. Sending a stop to a service that was
+            // never started could race with a following start and crash the app.
+            if (!running) return
+            try {
+                context.stopService(Intent(context, RemoteAudioService::class.java))
+            } catch (_: Throwable) {
             }
-            context.startService(intent)
         }
     }
-
-    inner class LocalBinder : Binder() {
-        fun getPlayer(): RemoteAudioPlayer? = audioPlayer
-    }
-
-    private val binder = LocalBinder()
-    private var audioPlayer: RemoteAudioPlayer? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -62,25 +60,12 @@ class RemoteAudioService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_START -> {
-                val host = intent.getStringExtra(EXTRA_HOST) ?: return START_NOT_STICKY
-                val token = intent.getStringExtra(EXTRA_TOKEN) ?: ""
-                startForegroundWithNotification()
-
-                audioPlayer?.stop()
-                val player = RemoteAudioPlayer(this) { stats ->
-                    // stats callback
-                }
-                audioPlayer = player
-                player.start(host, token)
-            }
-            ACTION_STOP -> {
-                audioPlayer?.stop()
-                audioPlayer = null
-                stopForeground(true)
-                stopSelf()
-            }
+        // Always satisfy startForegroundService() first, whatever the intent contains
+        try {
+            startForegroundWithNotification()
+            running = true
+        } catch (_: Throwable) {
+            stopSelf()
         }
         return START_NOT_STICKY
     }
@@ -94,8 +79,8 @@ class RemoteAudioService : Service() {
         )
 
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Capture Studio Remote Audio")
-            .setContentText("Live monitoring HDMI capture card audio")
+            .setContentTitle("Capture Studio Remote")
+            .setContentText("Listening to capture card audio")
             .setSmallIcon(android.R.drawable.ic_lock_silent_mode_off)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
@@ -119,19 +104,15 @@ class RemoteAudioService : Service() {
                 CHANNEL_ID,
                 "Remote Audio Playback",
                 NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = "Monitors low-latency HDMI audio playback in background"
-            }
-            val nm = getSystemService(NotificationManager::class.java)
-            nm?.createNotificationChannel(channel)
+            )
+            getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
         }
     }
 
-    override fun onBind(intent: Intent?): IBinder = binder
+    override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
-        audioPlayer?.stop()
-        audioPlayer = null
+        running = false
         super.onDestroy()
     }
 }
