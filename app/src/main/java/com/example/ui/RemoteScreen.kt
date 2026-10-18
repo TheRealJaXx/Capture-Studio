@@ -13,6 +13,8 @@ import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -67,6 +69,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -631,74 +634,75 @@ private fun VerticalFader(
     onDragEnd: () -> Unit,
     tag: String
 ) {
-    Box(
+    // Always read the latest values inside the long-lived pointerInput block
+    val latestValue by rememberUpdatedState(value)
+    val latestOnChange by rememberUpdatedState(onValueChange)
+    val latestOnEnd by rememberUpdatedState(onDragEnd)
+    val thumbHeight = 26.dp
+
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxHeight()
             .width(44.dp)
             .testTag(tag)
             .pointerInput(enabled) {
                 if (!enabled) return@pointerInput
+                var acc = 0f
                 detectVerticalDragGestures(
-                    onDragStart = { },
-                    onDragEnd = { onDragEnd() },
-                    onDragCancel = { onDragEnd() },
+                    onDragStart = { acc = latestValue },
+                    onDragEnd = { latestOnEnd() },
+                    onDragCancel = { latestOnEnd() },
                     onVerticalDrag = { change, dragAmount ->
                         change.consume()
-                        val h = size.height.toFloat()
-                        if (h > 0) {
-                            val deltaFraction = -dragAmount / h
-                            val newVal = (value + deltaFraction).coerceIn(0f, 1f)
-                            onValueChange(newVal)
-                        }
+                        val travel = (size.height - thumbHeight.toPx()).coerceAtLeast(1f)
+                        acc = (acc - dragAmount / travel).coerceIn(0f, 1f)
+                        latestOnChange(acc)
                     }
                 )
             },
-        contentAlignment = Alignment.BottomCenter
+        contentAlignment = Alignment.TopCenter
     ) {
+        val v = value.coerceIn(0f, 1f)
+        val travelDp = maxHeight - thumbHeight
+
         // Trough
         Box(
             modifier = Modifier
+                .align(Alignment.Center)
                 .width(6.dp)
                 .fillMaxHeight()
                 .clip(RoundedCornerShape(3.dp))
                 .background(Color(0xFF141720))
         )
 
-        // Active Track
+        // Active track: from the bottom up to the thumb centre
         Box(
             modifier = Modifier
+                .align(Alignment.BottomCenter)
                 .width(6.dp)
-                .fillMaxHeight(fraction = value.coerceIn(0.01f, 1f))
+                .height(travelDp * v + thumbHeight / 2)
                 .clip(RoundedCornerShape(3.dp))
                 .background(Color(0xFF3B82F6))
         )
 
-        // Fader Cap / Thumb
-        Box(
+        // Fader cap: moves with the value (top = full, bottom = silent)
+        Surface(
+            color = Color(0xFFE2E8F0),
+            shape = RoundedCornerShape(6.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF94A3B8)),
+            shadowElevation = 4.dp,
             modifier = Modifier
-                .fillMaxHeight(),
-            contentAlignment = Alignment.BottomCenter
+                .align(Alignment.TopCenter)
+                .offset(y = travelDp * (1f - v))
+                .size(width = 38.dp, height = thumbHeight)
         ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxHeight(fraction = value.coerceIn(0f, 1f))
-            )
-            Surface(
-                color = Color(0xFFE2E8F0),
-                shape = RoundedCornerShape(6.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF94A3B8)),
-                shadowElevation = 4.dp,
-                modifier = Modifier
-                    .size(width = 38.dp, height = 26.dp)
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Box(
-                        modifier = Modifier
-                            .width(20.dp)
-                            .height(2.dp)
-                            .background(Color(0xFF475569))
-                    )
-                }
+            Box(contentAlignment = Alignment.Center) {
+                Box(
+                    modifier = Modifier
+                        .width(20.dp)
+                        .height(2.dp)
+                        .background(Color(0xFF475569))
+                )
             }
         }
     }
