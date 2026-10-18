@@ -565,7 +565,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun startRemoteAudioStream(host: String, token: String) {
-        stopRemoteAudioStream()
+        remoteAudioPlayer?.stop()
+        remoteAudioPlayer = null
         val player = RemoteAudioPlayer(getApplication()) { stats ->
             _uiState.update { it.copy(remoteAudioStats = stats) }
         }
