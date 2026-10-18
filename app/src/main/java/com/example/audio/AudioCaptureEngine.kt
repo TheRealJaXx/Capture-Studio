@@ -462,6 +462,8 @@ class AudioCaptureEngine(
         val playbackBuffer = ShortArray(frameShorts)
 
         var meterBlockCount = 0
+        var lastMicPeakDb = -60f
+        var lastMicRmsDb = -60f
         var statusBlockCount = 0
         var errorStreak = 0
         var silentBlocks = 0
@@ -532,10 +534,12 @@ class AudioCaptureEngine(
             }
 
             // Secondary mic
-            var micPeakDb = -60f
-            var micRmsDb = -60f
+            var micPeakDb = lastMicPeakDb
+            var micRmsDb = lastMicRmsDb
             if (secondaryMicRecord != null && micAvailable) {
-                val micShorts = secondaryMicRecord.read(micBuffer, 0, micBuffer.size, AudioRecord.READ_BLOCKING)
+                // Non-blocking: the capture card read must be the ONLY thing pacing this loop,
+                // otherwise the mic's separate clock makes the stream packets bursty
+                val micShorts = secondaryMicRecord.read(micBuffer, 0, micBuffer.size, AudioRecord.READ_NON_BLOCKING)
                 if (micShorts > 0) {
                     var mPeak = 0
                     var mSum = 0.0
@@ -553,6 +557,9 @@ class AudioCaptureEngine(
                 micPeakDb = capPeakDb
                 micRmsDb = capRmsDb
             }
+
+            lastMicPeakDb = micPeakDb
+            lastMicRmsDb = micRmsDb
 
             // Meters at ~20 Hz
             meterBlockCount++
@@ -592,13 +599,12 @@ class AudioCaptureEngine(
             // UDP stream to the Remote (capture card audio only, never the mic)
             audioStreamer?.sendPcmChunk(pcmBuffer, shortsRead, now)
 
-            // Local monitor on the Feed
-            if (!localMonitorEnabled || isMuted || currentVolume <= 0.001f) {
-                playbackBuffer.fill(0)
-            } else {
+            // Local monitor on the Feed. Non-blocking, and skipped entirely when off, so the tablet's
+            // own audio clock never paces (and so never disturbs) the stream sent to the Remote.
+            if (localMonitorEnabled && !isMuted && currentVolume > 0.001f) {
                 System.arraycopy(pcmBuffer, 0, playbackBuffer, 0, shortsRead)
+                track.write(playbackBuffer, 0, shortsRead, AudioTrack.WRITE_NON_BLOCKING)
             }
-            track.write(playbackBuffer, 0, shortsRead)
         }
 
         try {
