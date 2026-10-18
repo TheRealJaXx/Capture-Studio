@@ -95,14 +95,22 @@ class RemoteAudioPlayer(
 
             // Receiver thread
             receiveThread = Thread({
-                Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
-                receiveLoop(sock, feedHost, pairingToken)
+                try {
+                    Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
+                    receiveLoop(sock, feedHost, pairingToken)
+                } catch (e: Throwable) {
+                    Log.e(TAG, "Receive thread crashed: ${e.message}", e)
+                }
             }, "RemoteAudio-Receiver").apply { start() }
 
             // Playback thread
             playbackThread = Thread({
-                Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
-                playbackLoop()
+                try {
+                    Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
+                    playbackLoop()
+                } catch (e: Throwable) {
+                    Log.e(TAG, "Playback thread crashed: ${e.message}", e)
+                }
             }, "RemoteAudio-Playback").apply { start() }
 
             Log.i(TAG, "RemoteAudioPlayer started for Feed at $feedHost")
@@ -197,7 +205,7 @@ class RemoteAudioPlayer(
                 }
 
                 val now = System.currentTimeMillis()
-                lastMeasuredLatency = (now - timestamp).coerceAtLeast(0)
+                lastMeasuredLatency = 0L
 
                 // Track packet loss
                 if (expectedSeq != -1L && seq > expectedSeq) {
