@@ -24,7 +24,8 @@ data class PlayerStats(
     val requestedFps: Int = 60,
     val decodeTimeMs: Long = 0,
     val frameAgeMs: Long = 0,
-    val droppedFrames: Long = 0
+    val droppedFrames: Long = 0,
+    val audioStatus: String = ""
 )
 
 enum class ScaleMode {
