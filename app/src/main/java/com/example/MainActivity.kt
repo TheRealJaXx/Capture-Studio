@@ -49,7 +49,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        CrashReporter.install(this)
         enableEdgeToEdge()
+        CrashReporter.showIfAny(this)
 
         checkAndRequestSystemPermissions()
 
