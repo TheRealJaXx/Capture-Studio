@@ -1,6 +1,8 @@
 package com.example.audio
 
+import android.Manifest
 import android.annotation.SuppressLint
+import android.content.pm.PackageManager
 import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioDeviceCallback
@@ -13,6 +15,7 @@ import android.media.MediaRecorder
 import android.os.Build
 import android.os.Process
 import android.util.Log
+import androidx.core.content.ContextCompat
 import com.example.net.AudioStreamer
 import com.example.net.Protocol
 import java.util.concurrent.atomic.AtomicBoolean
@@ -89,6 +92,12 @@ class AudioCaptureEngine(
     var onMetersCalculated: ((mic: Protocol.SourceMeter, capture: Protocol.SourceMeter) -> Unit)? = null
     var audioStreamer: AudioStreamer? = null
 
+    // Human-readable live status for the Feed HUD (device, route, level, mute flags)
+    var onStatus: ((String) -> Unit)? = null
+
+    // Generation counter: lets a restart retire any older audio thread that is still winding down
+    @Volatile private var generation = 0
+
     private var selectedDevice: AudioInputDevice? = null
     private var availableDevices: List<AudioInputDevice> = emptyList()
 
@@ -109,6 +118,32 @@ class AudioCaptureEngine(
     fun start() {
         audioManager.registerAudioDeviceCallback(audioDeviceCallback, null)
         refreshDevices()
+        ensureRunning()
+    }
+
+    private fun hasRecordPermission(): Boolean =
+        ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+
+    /**
+     * Starts the pipeline if it is not running. Needed because the pipeline is otherwise only
+     * (re)started when the selected device CHANGES, so a start attempt made before the
+     * microphone permission was granted, or after leaving and re-entering Feed mode, was never retried.
+     */
+    fun ensureRunning() {
+        if (!hasRecordPermission()) {
+            onStatus?.invoke("AUDIO: waiting for microphone permission")
+            return
+        }
+        if (selectedDevice == null) {
+            refreshDevices()
+            if (selectedDevice == null) {
+                onStatus?.invoke("AUDIO: no audio input device found")
+                return
+            }
+        }
+        val t = audioThread
+        if (t == null || !t.isAlive) restartAudioPipeline()
     }
 
     fun stop() {
@@ -237,43 +272,88 @@ class AudioCaptureEngine(
 
     fun isLocalMonitorEnabled(): Boolean = localMonitorEnabled
 
-    @SuppressLint("MissingPermission")
+    @Synchronized
     private fun restartAudioPipeline() {
         stopAudioPipeline()
 
         val dev = selectedDevice ?: return
+        if (!hasRecordPermission()) {
+            onStatus?.invoke("AUDIO: waiting for microphone permission")
+            return
+        }
         isRunning.set(true)
+        val gen = ++generation
 
         audioThread = Thread({
             Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
-            runAudioLoop(dev)
+            runAudioLoop(dev, gen)
         }, "AudioMonitorThread").apply {
             priority = Thread.MAX_PRIORITY
             start()
         }
     }
 
+    private fun alive(gen: Int) = isRunning.get() && gen == generation
+
+    private fun routeName(info: AudioDeviceInfo?): String = when (info?.type) {
+        null -> "unknown"
+        AudioDeviceInfo.TYPE_USB_DEVICE, AudioDeviceInfo.TYPE_USB_HEADSET -> "USB"
+        AudioDeviceInfo.TYPE_BUILTIN_MIC -> "built-in mic"
+        else -> "type ${info?.type}"
+    }
+
+    /**
+     * Tries several capture configurations for the selected device until one actually delivers data.
+     */
+    private fun runAudioLoop(inputDev: AudioInputDevice, gen: Int) {
+        val configs = listOf(
+            MediaRecorder.AudioSource.MIC to AudioFormat.CHANNEL_IN_STEREO,
+            MediaRecorder.AudioSource.MIC to AudioFormat.CHANNEL_IN_MONO,
+            MediaRecorder.AudioSource.VOICE_RECOGNITION to AudioFormat.CHANNEL_IN_STEREO,
+            MediaRecorder.AudioSource.VOICE_RECOGNITION to AudioFormat.CHANNEL_IN_MONO
+        )
+        for ((index, cfg) in configs.withIndex()) {
+            if (!alive(gen)) return
+            val finishedNormally = runWithConfig(inputDev, gen, cfg.first, cfg.second, index + 1, configs.size)
+            if (finishedNormally) return
+        }
+        if (alive(gen)) {
+            val msg = "Audio: no working input mode for ${inputDev.name}"
+            onStatus?.invoke("AUDIO FAILED: ${inputDev.name} (tried ${configs.size} modes)")
+            onError(msg)
+        }
+    }
+
+    /**
+     * @return true if the loop ended because it was stopped, false if this configuration failed.
+     */
     @SuppressLint("MissingPermission")
-    private fun runAudioLoop(inputDev: AudioInputDevice) {
-        val channelIn = AudioFormat.CHANNEL_IN_STEREO
+    private fun runWithConfig(
+        inputDev: AudioInputDevice,
+        gen: Int,
+        source: Int,
+        channelIn: Int,
+        attempt: Int,
+        totalAttempts: Int
+    ): Boolean {
+        val inputMono = channelIn == AudioFormat.CHANNEL_IN_MONO
         val channelOut = AudioFormat.CHANNEL_OUT_STEREO
         val encoding = AudioFormat.ENCODING_PCM_16BIT
+        val modeLabel = if (inputMono) "mono" else "stereo"
 
         val minRecBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, channelIn, encoding)
         val minTrackBuf = AudioTrack.getMinBufferSize(SAMPLE_RATE, channelOut, encoding)
-
         if (minRecBuf <= 0 || minTrackBuf <= 0) {
-            Log.e(TAG, "Invalid buffer sizes for audio: rec=$minRecBuf, track=$minTrackBuf")
-            return
+            Log.e(TAG, "Invalid buffer sizes for audio: rec=$minRecBuf, track=$minTrackBuf ($modeLabel)")
+            return false
         }
-
-        val recBufferSize = (minRecBuf * 2).coerceAtLeast(1920)
+        val recBufferSize = (minRecBuf * 2).coerceAtLeast(1920 * 2)
         val trackBufferSize = (minTrackBuf * 2).coerceAtLeast(1920)
 
-        // 1. Primary Capture AudioRecord
-        val record = try {
-            val builder = AudioRecord.Builder()
-                .setAudioSource(MediaRecorder.AudioSource.MIC)
+        // 1. Primary capture AudioRecord, routed to the selected device
+        val record: AudioRecord = try {
+            val rec = AudioRecord.Builder()
+                .setAudioSource(source)
                 .setAudioFormat(
                     AudioFormat.Builder()
                         .setEncoding(encoding)
@@ -282,17 +362,21 @@ class AudioCaptureEngine(
                         .build()
                 )
                 .setBufferSizeInBytes(recBufferSize)
-
-            val rec = builder.build()
-            rec.setPreferredDevice(inputDev.rawDevice)
+                .build()
+            if (rec.state != AudioRecord.STATE_INITIALIZED) {
+                rec.release()
+                Log.w(TAG, "AudioRecord not initialised ($modeLabel, source $source)")
+                return false
+            }
+            val prefOk = rec.setPreferredDevice(inputDev.rawDevice)
+            Log.i(TAG, "setPreferredDevice(${inputDev.name}) -> $prefOk ($modeLabel, source $source)")
             rec
         } catch (e: Throwable) {
-            Log.e(TAG, "Failed to create primary AudioRecord: ${e.message}")
-            onError("Audio input init failed: ${e.message}")
-            return
+            Log.e(TAG, "Failed to create primary AudioRecord ($modeLabel): ${e.message}")
+            return false
         }
 
-        // 2. Secondary Mic AudioRecord (Try capturing built-in mic simultaneously)
+        // 2. Secondary mic AudioRecord (built-in mic alongside USB capture), best effort
         var secondaryMicRecord: AudioRecord? = null
         val builtInMicDevice = availableDevices.find { it.isBuiltInMic }?.rawDevice
         if (inputDev.isUsb && builtInMicDevice != null) {
@@ -308,17 +392,14 @@ class AudioCaptureEngine(
                     )
                     .setBufferSizeInBytes(recBufferSize)
                     .build()
-
                 micRec.setPreferredDevice(builtInMicDevice)
                 micRec.startRecording()
                 if (micRec.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
                     secondaryMicRecord = micRec
                     micAvailable = true
-                    Log.i(TAG, "Secondary device microphone AudioRecord opened successfully")
                 } else {
                     micRec.release()
                     micAvailable = false
-                    Log.w(TAG, "Secondary mic not recording, fallback to single source")
                 }
             } catch (e: Throwable) {
                 Log.w(TAG, "Secondary mic recording not supported on this device: ${e.message}")
@@ -328,36 +409,32 @@ class AudioCaptureEngine(
             micAvailable = !inputDev.isUsb
         }
 
-        // 3. AudioTrack for local monitoring
-        val track = try {
+        // 3. AudioTrack for local monitoring on the Feed
+        val track: AudioTrack = try {
             val attr = AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_MEDIA)
                 .setContentType(AudioAttributes.CONTENT_TYPE_UNKNOWN)
                 .build()
-
             val format = AudioFormat.Builder()
                 .setEncoding(encoding)
                 .setSampleRate(SAMPLE_RATE)
                 .setChannelMask(channelOut)
                 .build()
-
             val trackBuilder = AudioTrack.Builder()
                 .setAudioAttributes(attr)
                 .setAudioFormat(format)
                 .setBufferSizeInBytes(trackBufferSize)
                 .setTransferMode(AudioTrack.MODE_STREAM)
-
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 trackBuilder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
             }
-
             trackBuilder.build()
         } catch (e: Throwable) {
             record.release()
             secondaryMicRecord?.release()
             Log.e(TAG, "Failed to create AudioTrack: ${e.message}")
             onError("Audio monitor init failed: ${e.message}")
-            return
+            return false
         }
 
         audioRecord = record
@@ -368,39 +445,72 @@ class AudioCaptureEngine(
             record.startRecording()
             track.play()
         } catch (e: Throwable) {
-            Log.e(TAG, "Failed to start AudioRecord or AudioTrack: ${e.message}")
+            Log.e(TAG, "Failed to start AudioRecord or AudioTrack ($modeLabel): ${e.message}")
             record.release()
             secondaryMicRecord?.release()
             track.release()
-            return
+            return false
         }
 
-        val bufferSize = 960 // 10ms at 48kHz stereo 16-bit
-        val pcmBuffer = ShortArray(bufferSize)
-        val micBuffer = ShortArray(bufferSize / 2)
-        val playbackBuffer = ShortArray(bufferSize)
+        val route = routeName(record.routedDevice)
+        Log.i(TAG, "Audio running: ${inputDev.name}, $modeLabel, source=$source, routed to $route (attempt $attempt/$totalAttempts)")
+
+        val frameShorts = 960 // 10 ms at 48 kHz stereo
+        val pcmBuffer = ShortArray(frameShorts)
+        val monoBuffer = ShortArray(frameShorts / 2)
+        val micBuffer = ShortArray(frameShorts / 2)
+        val playbackBuffer = ShortArray(frameShorts)
 
         var meterBlockCount = 0
+        var statusBlockCount = 0
+        var errorStreak = 0
+        var silentBlocks = 0
+        var failed = false
+        val startTime = System.currentTimeMillis()
 
-        Log.d(TAG, "Audio monitoring pipeline running at $SAMPLE_RATE Hz (Device: ${inputDev.name})")
+        while (alive(gen)) {
+            // Blocking read of exactly one 10 ms block
+            val shortsRead: Int
+            if (inputMono) {
+                val n = record.read(monoBuffer, 0, monoBuffer.size, AudioRecord.READ_BLOCKING)
+                if (n > 0) {
+                    for (i in 0 until n) {
+                        pcmBuffer[2 * i] = monoBuffer[i]
+                        pcmBuffer[2 * i + 1] = monoBuffer[i]
+                    }
+                }
+                shortsRead = if (n > 0) n * 2 else n
+            } else {
+                shortsRead = record.read(pcmBuffer, 0, pcmBuffer.size, AudioRecord.READ_BLOCKING)
+            }
 
-        while (isRunning.get()) {
-            val shortsRead = record.read(pcmBuffer, 0, pcmBuffer.size)
-            if (shortsRead <= 0) continue
+            if (shortsRead <= 0) {
+                errorStreak++
+                if (errorStreak == 1) Log.w(TAG, "AudioRecord.read returned $shortsRead ($modeLabel)")
+                if (errorStreak >= 50) {
+                    Log.e(TAG, "AudioRecord keeps failing (last code $shortsRead), giving up on this mode")
+                    failed = true
+                    break
+                }
+                try { Thread.sleep(5) } catch (_: InterruptedException) { }
+                continue
+            }
+            errorStreak = 0
 
             val now = System.currentTimeMillis()
 
-            // 1. Calculate raw Capture peak & RMS for metering
+            // Capture peak & RMS (pre-gain) for the meters
             var capPeakShort = 0
             var capSumSquares = 0.0
             for (i in 0 until shortsRead) {
-                val s = pcmBuffer[i].toInt()
-                val absS = abs(s)
+                val sample = pcmBuffer[i].toInt()
+                val absS = abs(sample)
                 if (absS > capPeakShort) capPeakShort = absS
-                capSumSquares += s.toDouble() * s.toDouble()
+                capSumSquares += sample.toDouble() * sample.toDouble()
             }
+            if (capPeakShort == 0) silentBlocks++ else silentBlocks = 0
 
-            // Anti-feedback guard analysis
+            // Anti-feedback guard
             if (capPeakShort >= FEEDBACK_THRESHOLD) {
                 feedbackTriggerCount++
                 if (feedbackTriggerCount >= FEEDBACK_CONSECUTIVE_FRAMES) {
@@ -413,43 +523,38 @@ class AudioCaptureEngine(
                 feedbackTriggerCount = 0
             }
 
-            // Calculate Capture dBFS
             val capPeakDb = if (capPeakShort > 0) {
                 (20.0 * log10(capPeakShort / 32768.0)).toFloat().coerceIn(-60f, 0f)
             } else -60f
-
-            val capRmsDb = if (shortsRead > 0) {
+            val capRmsDb = run {
                 val rms = sqrt(capSumSquares / shortsRead)
                 if (rms > 0) (20.0 * log10(rms / 32768.0)).toFloat().coerceIn(-60f, 0f) else -60f
-            } else -60f
+            }
 
-            // 2. Read secondary mic if open
+            // Secondary mic
             var micPeakDb = -60f
             var micRmsDb = -60f
             if (secondaryMicRecord != null && micAvailable) {
-                val micShorts = secondaryMicRecord.read(micBuffer, 0, micBuffer.size)
+                val micShorts = secondaryMicRecord.read(micBuffer, 0, micBuffer.size, AudioRecord.READ_BLOCKING)
                 if (micShorts > 0) {
                     var mPeak = 0
                     var mSum = 0.0
                     for (i in 0 until micShorts) {
-                        val s = micBuffer[i].toInt()
-                        val absS = abs(s)
+                        val sample = micBuffer[i].toInt()
+                        val absS = abs(sample)
                         if (absS > mPeak) mPeak = absS
-                        mSum += s.toDouble() * s.toDouble()
+                        mSum += sample.toDouble() * sample.toDouble()
                     }
                     micPeakDb = if (mPeak > 0) (20.0 * log10(mPeak / 32768.0)).toFloat().coerceIn(-60f, 0f) else -60f
-                    micRmsDb = if (micShorts > 0) {
-                        val rms = sqrt(mSum / micShorts)
-                        if (rms > 0) (20.0 * log10(rms / 32768.0)).toFloat().coerceIn(-60f, 0f) else -60f
-                    } else -60f
+                    val rms = sqrt(mSum / micShorts)
+                    micRmsDb = if (rms > 0) (20.0 * log10(rms / 32768.0)).toFloat().coerceIn(-60f, 0f) else -60f
                 }
             } else if (!inputDev.isUsb) {
-                // If primary device is built-in mic itself
                 micPeakDb = capPeakDb
                 micRmsDb = capRmsDb
             }
 
-            // 3. Publish meters at ~20 Hz (every 5 blocks of 10ms = 50ms)
+            // Meters at ~20 Hz
             meterBlockCount++
             if (meterBlockCount >= 5) {
                 meterBlockCount = 0
@@ -459,7 +564,22 @@ class AudioCaptureEngine(
                 )
             }
 
-            // 4. Apply Capture Gain & Mute for Streamer & Playback
+            // HUD status ~2 Hz
+            statusBlockCount++
+            if (statusBlockCount >= 50) {
+                statusBlockCount = 0
+                val flags = StringBuilder()
+                if (silentBlocks >= 300) flags.append(" | NO SIGNAL (digital silence)")
+                if (isMuted) flags.append(" | MUTED(master)")
+                if (captureMuted) flags.append(" | MUTED(capture)")
+                if (!localMonitorEnabled) flags.append(" | local monitor off")
+                onStatus?.invoke(
+                    "AUDIO ${inputDev.name} | $modeLabel | route: ${routeName(record.routedDevice)} | " +
+                        String.format("%.0f dB", capPeakDb) + flags
+                )
+            }
+
+            // Capture gain & mute for stream and local playback
             val effectiveCaptureGain = if (isMuted || captureMuted) 0f else (captureGain * currentVolume)
             for (i in 0 until shortsRead) {
                 if (effectiveCaptureGain <= 0.001f) {
@@ -469,16 +589,15 @@ class AudioCaptureEngine(
                 }
             }
 
-            // 5. Send to UDP AudioStreamer (Stage 5) - captures card audio only, never mic
+            // UDP stream to the Remote (capture card audio only, never the mic)
             audioStreamer?.sendPcmChunk(pcmBuffer, shortsRead, now)
 
-            // 6. Local Monitor Output on Feed
+            // Local monitor on the Feed
             if (!localMonitorEnabled || isMuted || currentVolume <= 0.001f) {
                 playbackBuffer.fill(0)
             } else {
                 System.arraycopy(pcmBuffer, 0, playbackBuffer, 0, shortsRead)
             }
-
             track.write(playbackBuffer, 0, shortsRead)
         }
 
@@ -492,10 +611,13 @@ class AudioCaptureEngine(
         } catch (e: Throwable) {
             Log.w(TAG, "Error cleaning up audio: ${e.message}")
         }
+
+        return !failed
     }
 
     private fun stopAudioPipeline() {
         isRunning.set(false)
+        generation++
         try {
             audioThread?.join(300)
         } catch (_: InterruptedException) {
