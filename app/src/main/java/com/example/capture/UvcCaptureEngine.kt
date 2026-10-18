@@ -1,9 +1,10 @@
 package com.example.capture
 
-import android.graphics.ImageFormat
+import android.graphics.PixelFormat
 import android.media.ImageReader
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.Looper
 import android.util.Log
 import com.example.player.MjpegPlayer
 import com.serenegiant.usb.IFrameCallback
@@ -13,6 +14,7 @@ import com.serenegiant.usb.UVCCamera
 import com.serenegiant.usb.UVCParam
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * High-performance UVC capture engine wrapping com.serenegiant.usb.UVCCamera.
@@ -55,8 +57,15 @@ class UvcCaptureEngine(
     private var offscreenDrainHandler: Handler? = null
     private var offscreenImageReader: ImageReader? = null
 
+    private val frameCounter = AtomicLong(0)
+    private val watchdogHandler = Handler(Looper.getMainLooper())
+    private var watchdogRetried = false
+
     private val frameCallback = IFrameCallback { frameByteBuffer: ByteBuffer ->
         if (isStreaming.get()) {
+            if (frameCounter.getAndIncrement() == 0L) {
+                Log.i(TAG, "First frame received: ${frameByteBuffer.remaining()} bytes")
+            }
             mjpegPlayer.onNewFrame(frameByteBuffer)
         }
     }
@@ -251,27 +260,30 @@ class UvcCaptureEngine(
                 }
             }
 
-            // Register frame callback: delivers raw MJPEG frames directly to MjpegPlayer
-            camera.setFrameCallback(frameCallback, UVCCamera.PIXEL_FORMAT_RAW)
-
-            // Start preview streaming
-            try {
-                camera.startPreview()
-                isStreaming.set(true)
-                Log.i(TAG, "UVCCamera preview started (direct frame callback mode)")
-            } catch (e: Throwable) {
-                Log.w(TAG, "startPreview without surface failed: ${e.message}, applying offscreen drain surface")
-                setupOffscreenDrain(camera, mode.targetWidth, mode.targetHeight)
-                camera.startPreview()
-                isStreaming.set(true)
-            }
-
+            // IMPORTANT ORDER (UVCAndroid native): the preview thread, which also drives the
+            // frame callback, only starts if a preview surface is attached BEFORE startPreview().
+            // 1) size the player buffers for RGBX frames (w*h*4)
             mjpegPlayer.updateStreamConfig(
                 reqFps = mode.targetFps,
                 negFps = negotiatedFps,
                 width = mode.targetWidth,
                 height = mode.targetHeight
             )
+
+            // 2) attach an offscreen drain surface (always, not as a fallback)
+            setupOffscreenDrain(camera, mode.targetWidth, mode.targetHeight)
+
+            // 3) frame callback: RGBX = decoded frame, w*h*4 bytes, no extra conversion
+            frameCounter.set(0)
+            camera.setFrameCallback(frameCallback, UVCCamera.PIXEL_FORMAT_RGBX)
+
+            // 4) start streaming
+            camera.startPreview()
+            isStreaming.set(true)
+            Log.i(TAG, "UVCCamera preview started (surface attached, RGBX callback)")
+
+            // 5) watchdog: if no frames arrive, retry once then report
+            scheduleWatchdog(mode)
 
             onStreamConfigured(mode.targetFps, negotiatedFps, mode.targetWidth, mode.targetHeight)
             Log.i(TAG, "Stream active for mode: ${mode.id}")
@@ -290,7 +302,7 @@ class UvcCaptureEngine(
         try {
             val thread = HandlerThread("UvcOffscreenDrain").apply { start() }
             val handler = Handler(thread.looper)
-            val reader = ImageReader.newInstance(width, height, ImageFormat.YUV_420_888, 2)
+            val reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 3)
             reader.setOnImageAvailableListener({ r ->
                 try {
                     r.acquireLatestImage()?.close()
@@ -316,7 +328,26 @@ class UvcCaptureEngine(
         offscreenDrainHandler = null
     }
 
+    private fun scheduleWatchdog(mode: QualityMode) {
+        watchdogHandler.removeCallbacksAndMessages(null)
+        watchdogHandler.postDelayed({
+            if (isStreaming.get() && frameCounter.get() == 0L) {
+                if (!watchdogRetried) {
+                    watchdogRetried = true
+                    Log.w(TAG, "No frames 2s after startPreview, restarting stream once")
+                    startStream(mode)
+                } else {
+                    Log.e(TAG, "Still no frames after retry")
+                    onError("No video frames received from capture card")
+                }
+            } else {
+                watchdogRetried = false
+            }
+        }, 2000)
+    }
+
     fun stopStream() {
+        watchdogHandler.removeCallbacksAndMessages(null)
         if (isStreaming.getAndSet(false)) {
             try {
                 uvcCamera?.stopPreview()
