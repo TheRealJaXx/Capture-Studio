@@ -45,22 +45,20 @@ class MjpegPlayer(
 ) {
     companion object {
         private const val TAG = "MjpegPlayer"
-        private const val MAX_FRAME_BUFFER_SIZE = 4 * 1024 * 1024 // 4 MB for high-res MJPEG frames
     }
 
     private class FrameBuffer(val capacity: Int) {
         val data = ByteArray(capacity)
+        val byteBuffer: ByteBuffer = ByteBuffer.wrap(data)
         var length = 0
         var timestampMs = 0L
     }
 
-    // Pre-allocated reusable double buffer for zero-allocation handoff
-    private val bufferA = FrameBuffer(MAX_FRAME_BUFFER_SIZE)
-    private val bufferB = FrameBuffer(MAX_FRAME_BUFFER_SIZE)
-    private var writeBuffer = bufferA
-
-    // Pre-allocated DHT injection buffer if needed
-    private val dhtBuffer = ByteArray(MAX_FRAME_BUFFER_SIZE + 1024)
+    // Frames from UVCAndroid arrive as decoded RGBX (w*h*4 bytes). Buffers are sized per mode
+    // in allocateBuffers() (never in the per-frame path).
+    @Volatile private var bufferA = FrameBuffer(1280 * 720 * 4)
+    @Volatile private var bufferB = FrameBuffer(1280 * 720 * 4)
+    @Volatile private var writeBuffer = bufferA
 
     // Single-slot handoff for latest-frame-wins
     private val latestFrame = AtomicReference<FrameBuffer?>(null)
@@ -121,19 +119,32 @@ class MjpegPlayer(
         negotiatedFps = negFps
         targetFps = if (negFps > 0) negFps else reqFps
 
-        if (frameWidth != width || frameHeight != height || reusableBitmap == null) {
+        if (frameWidth != width || frameHeight != height || reusableBitmap == null ||
+            bufferA.capacity != width * height * 4
+        ) {
             frameWidth = width
             frameHeight = height
+            allocateBuffers(width, height)
             updateReusableBitmap(width, height)
         }
 
         applyFrameRateToSurface()
     }
 
+    private fun allocateBuffers(width: Int, height: Int) {
+        val size = width * height * 4
+        latestFrame.set(null)
+        val a = FrameBuffer(size)
+        val b = FrameBuffer(size)
+        bufferA = a
+        bufferB = b
+        writeBuffer = a
+    }
+
     private fun updateReusableBitmap(width: Int, height: Int) {
         try {
             reusableBitmap?.recycle()
-            reusableBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            reusableBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also { it.setHasAlpha(false) }
             bitmapOptions.inBitmap = reusableBitmap
             srcRect.set(0, 0, width, height)
             updateDestRect()
@@ -241,11 +252,21 @@ class MjpegPlayer(
      * Called directly from UVC onFrame callback with incoming MJPEG frame.
      * ZERO per-frame heap allocations.
      */
+    private var lastBadFrameLog = 0L
+
     fun onNewFrame(byteBuffer: ByteBuffer) {
         val length = byteBuffer.remaining()
-        if (length <= 0 || length > MAX_FRAME_BUFFER_SIZE) return
-
         val targetBuf = writeBuffer
+        if (length <= 0 || length != frameWidth * frameHeight * 4 || length > targetBuf.capacity) {
+            droppedFramesCounter.incrementAndGet()
+            val now = System.currentTimeMillis()
+            if (now - lastBadFrameLog > 1000) {
+                lastBadFrameLog = now
+                Log.w(TAG, "Dropped frame: got $length bytes, expected ${frameWidth * frameHeight * 4}")
+            }
+            return
+        }
+
         byteBuffer.get(targetBuf.data, 0, length)
         targetBuf.length = length
         targetBuf.timestampMs = System.currentTimeMillis()
@@ -289,12 +310,9 @@ class MjpegPlayer(
         }
     }
 
-    private var argbPixels = IntArray(1920 * 1080)
-
     private fun processAndRenderFrame(frame: FrameBuffer) {
         val now = System.currentTimeMillis()
         val frameTimestamp = frame.timestampMs
-        val rawData = frame.data
         val rawLen = frame.length
 
         // FPS tracking
@@ -309,65 +327,17 @@ class MjpegPlayer(
         val decodeStart = System.currentTimeMillis()
         var decoded: Bitmap? = null
 
-        val soiIndex = JpegUtils.findJpegStartIndex(rawData, rawLen)
-        if (soiIndex >= 0) {
-            val jpegOffset = soiIndex
-            val jpegLen = rawLen - soiIndex
-
-            val decodeData: ByteArray
-            val decodeOffset: Int
-            val decodeLen: Int
-
-            if (!JpegUtils.hasHuffmanTable(rawData, jpegOffset, jpegLen)) {
-                val injectedLen = JpegUtils.injectHuffmanTable(rawData, jpegOffset, jpegLen, dhtBuffer)
-                decodeData = dhtBuffer
-                decodeOffset = 0
-                decodeLen = injectedLen
-            } else {
-                decodeData = rawData
-                decodeOffset = jpegOffset
-                decodeLen = jpegLen
-            }
-
-            // Attempt fast zero-allocation inBitmap decode
-            decoded = try {
-                BitmapFactory.decodeByteArray(decodeData, decodeOffset, decodeLen, bitmapOptions)
-            } catch (e: Throwable) {
-                null
-            }
-
-            // Fallback: decode without inBitmap if size mismatch or initial configuration
-            if (decoded == null) {
-                val fallbackOpts = BitmapFactory.Options().apply {
-                    inPreferredConfig = Bitmap.Config.ARGB_8888
-                }
-                decoded = try {
-                    BitmapFactory.decodeByteArray(decodeData, decodeOffset, decodeLen, fallbackOpts)
-                } catch (e: Throwable) {
-                    Log.w(TAG, "BitmapFactory fallback decode failed: ${e.message}")
-                    null
-                }
-                if (decoded != null) {
-                    updateReusableBitmap(decoded.width, decoded.height)
-                }
-            }
-        } else if (rawLen >= frameWidth * frameHeight * 2) {
-            // Uncompressed YUYV format from card
-            val w = frameWidth
-            val h = frameHeight
-            val pixelCount = w * h
-            if (argbPixels.size < pixelCount) {
-                argbPixels = IntArray(pixelCount)
-            }
-            JpegUtils.decodeYuyvToArgb(rawData, 0, w, h, argbPixels)
-            var bmp = reusableBitmap
-            if (bmp == null || bmp.width != w || bmp.height != h) {
-                updateReusableBitmap(w, h)
-                bmp = reusableBitmap
-            }
-            if (bmp != null) {
-                bmp.setPixels(argbPixels, 0, w, 0, 0, w, h)
+        // Frame is already decoded RGBX (same byte order as ARGB_8888 Bitmap memory): straight copy
+        val bmp = reusableBitmap
+        if (bmp != null && !bmp.isRecycled && bmp.width == frameWidth && bmp.height == frameHeight &&
+            rawLen == frameWidth * frameHeight * 4 && frame.capacity >= rawLen
+        ) {
+            try {
+                frame.byteBuffer.rewind()
+                bmp.copyPixelsFromBuffer(frame.byteBuffer)
                 decoded = bmp
+            } catch (e: Throwable) {
+                Log.w(TAG, "copyPixelsFromBuffer failed: ${e.message}")
             }
         }
 
