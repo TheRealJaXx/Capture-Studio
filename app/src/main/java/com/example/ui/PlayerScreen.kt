@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FitScreen
 import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.VolumeMute
@@ -105,7 +106,14 @@ fun PlayerScreen(
     onToggleAudioMute: () -> Unit,
     onToggleLocalMonitor: () -> Unit,
     onDismissFeedbackWarning: () -> Unit,
-    onNavigateBack: () -> Unit
+    onNavigateBack: () -> Unit,
+    overlayUri: String? = null,
+    overlayVisible: Boolean = false,
+    overlayCx: Float = 0.5f,
+    overlayCy: Float = 0.5f,
+    overlayWidth: Float = 0.3f,
+    onOverlayTransformChanged: (Float, Float, Float) -> Unit = { _, _, _ -> },
+    onPickOverlay: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val activity = context as? Activity
@@ -187,6 +195,16 @@ fun PlayerScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .testTag("surface_player_view")
+        )
+
+        // User PNG overlay: drag with one finger, pinch to resize (button 6 on the Remote toggles it)
+        PngOverlay(
+            uri = overlayUri,
+            visible = overlayVisible,
+            centerX = overlayCx,
+            centerY = overlayCy,
+            widthFraction = overlayWidth,
+            onTransformChanged = onOverlayTransformChanged
         )
 
         // Real-time HUD Performance Stats Overlay
@@ -325,6 +343,27 @@ fun PlayerScreen(
                                 imageVector = if (scaleMode == ScaleMode.FIT) Icons.Default.AspectRatio else Icons.Default.FitScreen,
                                 contentDescription = if (scaleMode == ScaleMode.FIT) "Fit Letterbox" else "Fill Screen",
                                 tint = if (scaleMode == ScaleMode.FILL) Color(0xFF60A5FA) else Color.White,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+
+                        // Choose the PNG overlay image
+                        IconButton(
+                            onClick = {
+                                onPickOverlay()
+                                userTouchTimestamp = System.currentTimeMillis()
+                            },
+                            modifier = Modifier
+                                .background(
+                                    if (overlayVisible && overlayUri != null) Color(0xFF1E3A8A).copy(alpha = 0.8f) else Color.Black.copy(alpha = 0.5f),
+                                    CircleShape
+                                )
+                                .testTag("pick_overlay_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Image,
+                                contentDescription = "PNG overlay",
+                                tint = if (overlayVisible && overlayUri != null) Color(0xFF93C5FD) else Color.White,
                                 modifier = Modifier.size(20.dp)
                             )
                         }
