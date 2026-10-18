@@ -34,8 +34,8 @@ class RemoteAudioPlayer(
     companion object {
         private const val TAG = "RemoteAudioPlayer"
         private const val SAMPLE_RATE = 48000
-        private const val PACKET_DURATION_MS = 10
-        private const val SAMPLES_PER_PACKET = 960 // 480 frames * 2 channels = 960 shorts
+        private const val PACKET_DURATION_MS = 5
+        private const val SAMPLES_PER_PACKET = 480 // 5 ms: 240 frames * 2 channels
     }
 
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -46,7 +46,7 @@ class RemoteAudioPlayer(
 
     private val isRunning = AtomicBoolean(false)
     private var monitorVolume = 1.0f
-    private var targetJitterDepthMs = 40 // default 40ms
+    private var targetJitterDepthMs = 80 // default 80ms: absorbs Wi-Fi jitter
 
     // Jitter buffer queue sorted by sequence number
     private val jitterBuffer = TreeMap<Long, ShortArray>()
@@ -58,6 +58,9 @@ class RemoteAudioPlayer(
     private var totalPacketsLost = 0L
     private var lastMeasuredLatency = 0L
     private var lastStatsPush = 0L
+
+    // Next sequence number the playback thread will play; older (late) packets are discarded on arrival
+    @Volatile private var nextPlaySeq = -1L
 
     private var wifiLock: WifiManager.WifiLock? = null
 
@@ -218,8 +221,13 @@ class RemoteAudioPlayer(
                 expectedSeq = seq + 1
 
                 // Insert into jitter buffer
-                val maxPackets = (targetJitterDepthMs / PACKET_DURATION_MS) + 4
+                val maxPackets = (targetJitterDepthMs / PACKET_DURATION_MS) + 8
                 synchronized(bufferLock) {
+                    // Drop packets that arrive too late to be played
+                    if (nextPlaySeq != -1L && seq < nextPlaySeq) {
+                        bufferLock.notify()
+                        return@synchronized
+                    }
                     jitterBuffer[seq] = samples
                     // Clock drift compensation: drop oldest frames if queue exceeds limit
                     while (jitterBuffer.size > maxPackets) {
@@ -243,56 +251,51 @@ class RemoteAudioPlayer(
 
     private fun playbackLoop() {
         var playSeq = -1L
+        var buffering = true // true until the jitter buffer has been (re)filled to the target depth
         val silence = ShortArray(SAMPLES_PER_PACKET)
-        val targetPackets = (targetJitterDepthMs / PACKET_DURATION_MS).coerceAtLeast(2)
 
         while (isRunning.get()) {
+            val targetPackets = (targetJitterDepthMs / PACKET_DURATION_MS).coerceAtLeast(2)
             var chunkToPlay: ShortArray? = null
 
             synchronized(bufferLock) {
-                // Initial buffer pre-fill
-                while (isRunning.get() && playSeq == -1L && jitterBuffer.size < targetPackets) {
-                    try {
-                        bufferLock.wait(100)
-                    } catch (_: InterruptedException) {
-                        return
-                    }
-                }
-
                 if (!isRunning.get()) return
 
-                if (playSeq == -1L) {
+                if (buffering && jitterBuffer.size >= targetPackets) {
+                    // Cushion is full: start (or resume) playing from the oldest packet we have
+                    buffering = false
                     playSeq = jitterBuffer.firstKey()
                 }
 
-                if (jitterBuffer.containsKey(playSeq)) {
-                    chunkToPlay = jitterBuffer.remove(playSeq)
-                    playSeq++
-                } else {
-                    // Check if there is a newer packet ahead
-                    val nextKey = jitterBuffer.higherKey(playSeq)
-                    if (nextKey != null && nextKey - playSeq <= 3) {
-                        // Small gap: conceal with silence/gap filling
-                        chunkToPlay = silence
-                        playSeq++
-                    } else if (nextKey != null) {
-                        // Large gap: resync to nextKey
-                        playSeq = nextKey
+                if (!buffering) {
+                    if (jitterBuffer.containsKey(playSeq)) {
                         chunkToPlay = jitterBuffer.remove(playSeq)
                         playSeq++
                     } else {
-                        // Buffer underrun, wait briefly
-                        try {
-                            bufferLock.wait(10)
-                        } catch (_: InterruptedException) {
-                            return
+                        val nextKey = jitterBuffer.higherKey(playSeq)
+                        if (nextKey != null && nextKey - playSeq <= 3) {
+                            // Small gap: conceal with silence
+                            chunkToPlay = silence
+                            playSeq++
+                        } else if (nextKey != null) {
+                            // Large gap: skip ahead
+                            playSeq = nextKey
+                            chunkToPlay = jitterBuffer.remove(playSeq)
+                            playSeq++
+                        } else {
+                            // Underrun: go back to buffering so the cushion is rebuilt instead of
+                            // running at zero depth (which would stutter on every late packet)
+                            buffering = true
                         }
                     }
                 }
+                nextPlaySeq = if (buffering) -1L else playSeq
             }
 
-            if (chunkToPlay != null && isRunning.get()) {
-                audioTrack?.write(chunkToPlay, 0, chunkToPlay.size)
+            // While buffering, keep the audio track fed with silence (the blocking write paces the loop)
+            val toWrite = chunkToPlay ?: if (buffering) silence else null
+            if (toWrite != null && isRunning.get()) {
+                audioTrack?.write(toWrite, 0, toWrite.size)
             }
 
             val now = System.currentTimeMillis()
