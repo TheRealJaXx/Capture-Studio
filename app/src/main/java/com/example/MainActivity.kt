@@ -47,6 +47,21 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val pickOverlayLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            try {
+                contentResolver.takePersistableUriPermission(
+                    uri,
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (_: Throwable) {
+            }
+            viewModel.setOverlayImage(uri.toString())
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         CrashReporter.install(this)
@@ -143,6 +158,17 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onNavigateBack = {
                                     viewModel.navigateToConnect()
+                                },
+                                overlayUri = uiState.overlayUri,
+                                overlayVisible = uiState.overlayVisible,
+                                overlayCx = uiState.overlayCx,
+                                overlayCy = uiState.overlayCy,
+                                overlayWidth = uiState.overlayWidth,
+                                onOverlayTransformChanged = { cx, cy, w ->
+                                    viewModel.saveOverlayTransform(cx, cy, w)
+                                },
+                                onPickOverlay = {
+                                    pickOverlayLauncher.launch(arrayOf("image/*"))
                                 }
                             )
                         }
