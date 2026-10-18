@@ -102,7 +102,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // Low-level engines for Feed
     val mjpegPlayer = MjpegPlayer { stats ->
-        _uiState.update { it.copy(playerStats = stats) }
+        _uiState.update { it.copy(playerStats = stats.copy(audioStatus = it.playerStats.audioStatus)) }
     }
 
     private var activeCtrlBlock: USBMonitor.UsbControlBlock? = null
@@ -147,6 +147,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         },
         onError = { msg ->
             Log.e(TAG, "Audio error: $msg")
+            _uiState.update { it.copy(errorMessage = msg) }
         }
     )
 
@@ -287,6 +288,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             controlServer?.updateMeters(mic, cap)
         }
 
+        // Live audio status line for the Feed HUD
+        audioCaptureEngine.onStatus = { status ->
+            _uiState.update { it.copy(playerStats = it.playerStats.copy(audioStatus = status)) }
+        }
+
         // Start Control Server
         startControlServer()
     }
@@ -296,6 +302,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         audioStreamer.stop()
         audioCaptureEngine.audioStreamer = null
         audioCaptureEngine.onMetersCalculated = null
+        audioCaptureEngine.onStatus = null
         uvcCaptureEngine.close()
         usbMonitorManager.stop()
         audioCaptureEngine.stop()
@@ -583,6 +590,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 hasCameraPermission = hasCamera,
                 hasAudioPermission = hasAudio
             )
+        }
+        if (hasAudio && _uiState.value.currentScreen != CurrentScreen.REMOTE) {
+            // Permission may have arrived after the audio pipeline already tried (and failed) to start
+            audioCaptureEngine.ensureRunning()
         }
         if (hasCamera && _uiState.value.currentScreen != CurrentScreen.REMOTE) {
             checkInitialUsbDevices()
