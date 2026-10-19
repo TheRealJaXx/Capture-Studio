@@ -46,7 +46,7 @@ class RemoteAudioPlayer(
 
     private val isRunning = AtomicBoolean(false)
     private var monitorVolume = 1.0f
-    private var targetJitterDepthMs = 80 // default 80ms: absorbs Wi-Fi jitter
+    private var targetJitterDepthMs = 100 // default 100ms: absorbs Wi-Fi jitter
 
     // Jitter buffer queue sorted by sequence number
     private val jitterBuffer = TreeMap<Long, ShortArray>()
@@ -87,10 +87,6 @@ class RemoteAudioPlayer(
         try {
             val sock = DatagramSocket().apply {
                 soTimeout = 2000
-                try {
-                    trafficClass = 0xB8
-                } catch (_: Throwable) {
-                }
             }
             udpSocket = sock
 
@@ -127,10 +123,10 @@ class RemoteAudioPlayer(
         val channelOut = AudioFormat.CHANNEL_OUT_STEREO
         val encoding = AudioFormat.ENCODING_PCM_16BIT
         val minBuf = AudioTrack.getMinBufferSize(SAMPLE_RATE, channelOut, encoding)
-        val trackBuf = (minBuf * 2).coerceAtLeast(1920)
+        val trackBuf = (minBuf * 4).coerceAtLeast(3840)
 
         val attr = AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_MEDIA)
+            .setUsage(AudioAttributes.USAGE_GAME)
             .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
             .build()
 
@@ -253,6 +249,11 @@ class RemoteAudioPlayer(
         var playSeq = -1L
         var buffering = true // true until the jitter buffer has been (re)filled to the target depth
         val silence = ShortArray(SAMPLES_PER_PACKET)
+        val concealBuf = ShortArray(SAMPLES_PER_PACKET)
+        var lastChunk: ShortArray? = null
+        var concealCount = 0
+        // After an underrun only refill a small cushion (20 ms) instead of the full target, so a hiccup costs ~20 ms not ~100 ms
+        var refillPackets = targetJitterDepthMs / PACKET_DURATION_MS
 
         while (isRunning.get()) {
             val targetPackets = (targetJitterDepthMs / PACKET_DURATION_MS).coerceAtLeast(2)
@@ -261,7 +262,7 @@ class RemoteAudioPlayer(
             synchronized(bufferLock) {
                 if (!isRunning.get()) return
 
-                if (buffering && jitterBuffer.size >= targetPackets) {
+                if (buffering && jitterBuffer.size >= minOf(targetPackets, refillPackets)) {
                     // Cushion is full: start (or resume) playing from the oldest packet we have
                     buffering = false
                     playSeq = jitterBuffer.firstKey()
@@ -270,22 +271,35 @@ class RemoteAudioPlayer(
                 if (!buffering) {
                     if (jitterBuffer.containsKey(playSeq)) {
                         chunkToPlay = jitterBuffer.remove(playSeq)
+                        lastChunk = chunkToPlay
+                        concealCount = 0
                         playSeq++
                     } else {
                         val nextKey = jitterBuffer.higherKey(playSeq)
                         if (nextKey != null && nextKey - playSeq <= 3) {
-                            // Small gap: conceal with silence
-                            chunkToPlay = silence
+                            // Small gap: repeat the last packet faded (first gap 50%, second 25%, then silence)
+                            val lc = lastChunk
+                            if (lc != null && concealCount < 2) {
+                                val shift = concealCount + 1
+                                for (i in lc.indices) concealBuf[i] = (lc[i].toInt() shr shift).toShort()
+                                chunkToPlay = concealBuf
+                            } else {
+                                chunkToPlay = silence
+                            }
+                            concealCount++
                             playSeq++
                         } else if (nextKey != null) {
                             // Large gap: skip ahead
                             playSeq = nextKey
                             chunkToPlay = jitterBuffer.remove(playSeq)
+                            lastChunk = chunkToPlay
+                            concealCount = 0
                             playSeq++
                         } else {
                             // Underrun: go back to buffering so the cushion is rebuilt instead of
                             // running at zero depth (which would stutter on every late packet)
                             buffering = true
+                            refillPackets = 4
                         }
                     }
                 }
