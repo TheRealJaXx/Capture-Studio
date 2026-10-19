@@ -307,10 +307,10 @@ class AudioCaptureEngine(
      */
     private fun runAudioLoop(inputDev: AudioInputDevice, gen: Int) {
         val configs = listOf(
+            MediaRecorder.AudioSource.UNPROCESSED to AudioFormat.CHANNEL_IN_STEREO,
+            MediaRecorder.AudioSource.UNPROCESSED to AudioFormat.CHANNEL_IN_MONO,
             MediaRecorder.AudioSource.MIC to AudioFormat.CHANNEL_IN_STEREO,
-            MediaRecorder.AudioSource.MIC to AudioFormat.CHANNEL_IN_MONO,
-            MediaRecorder.AudioSource.VOICE_RECOGNITION to AudioFormat.CHANNEL_IN_STEREO,
-            MediaRecorder.AudioSource.VOICE_RECOGNITION to AudioFormat.CHANNEL_IN_MONO
+            MediaRecorder.AudioSource.MIC to AudioFormat.CHANNEL_IN_MONO
         )
         for ((index, cfg) in configs.withIndex()) {
             if (!alive(gen)) return
@@ -379,7 +379,7 @@ class AudioCaptureEngine(
         // 2. Secondary mic AudioRecord (built-in mic alongside USB capture), best effort
         var secondaryMicRecord: AudioRecord? = null
         val builtInMicDevice = availableDevices.find { it.isBuiltInMic }?.rawDevice
-        if (inputDev.isUsb && builtInMicDevice != null) {
+        if (false && inputDev.isUsb && builtInMicDevice != null) { // secondary VOICE_COMMUNICATION mic disabled: it put the audio HAL in call mode
             try {
                 val micRec = AudioRecord.Builder()
                     .setAudioSource(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
