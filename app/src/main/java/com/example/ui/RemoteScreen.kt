@@ -9,12 +9,12 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -31,20 +32,19 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Block
-import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
-import androidx.compose.material.icons.filled.NetworkCheck
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.VolumeDown
 import androidx.compose.material.icons.filled.VolumeMute
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.Wifi
-import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -95,7 +95,6 @@ import com.example.net.DiscoveredFeed
 import com.example.net.Protocol
 import com.example.net.RemoteAudioStats
 import kotlin.math.log10
-import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -150,40 +149,50 @@ fun RemoteScreen(
 
     val isConnected = connectionStatus == ConnectionStatus.CONNECTED
 
+    // State for toggled/selected buttons on Remote
+    var activeShortcuts by remember {
+        mutableStateOf(
+            setOf(1, 5) // By default START STREAM & SCENE: LIVE selected like in reference image
+        )
+    }
+
+    // Current page of shortcuts (0-indexed: Page 0 = 1..6, Page 1 = 7..12, Page 2 = 13..18)
+    var currentShortcutPage by remember { mutableIntStateOf(0) }
+    val totalPages = 3
+
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF0F111A))
+            .background(Color(0xFF0C0E14))
             .statusBarsPadding()
             .navigationBarsPadding()
     ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 14.dp, vertical = 8.dp)
+                .padding(horizontal = 14.dp, vertical = 6.dp)
         ) {
-            // 1. Slim Status Bar
-            RemoteStatusBar(
+            // 1. Slim Top Bar: [Connected] on left, STREAM CAPTURE in center, Setup on right
+            RemoteTopBar(
                 connectionStatus = connectionStatus,
-                connectedIp = connectedFeedIp,
                 latencyMs = latencyMs,
                 onBack = requestLeave,
-                onOpenConnectionSheet = { showConnectionSheet = true },
+                onOpenSetup = { showConnectionSheet = true },
                 onReconnect = onReconnect
             )
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // 2. Dual Channel Audio Section (MIC and CAPTURE)
+            // 2. Dual Channel Audio Section (MIC/AUX and GAME AUDIO) matching reference image
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1.15f),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                // MIC Channel Strip
+                // MIC / AUX Channel Card (Cyan theme)
                 AudioChannelStrip(
-                    title = "MIC",
+                    title = "MIC/AUX",
                     isCapture = false,
                     isAvailable = feedState.micAvailable && isConnected,
                     gain = feedState.micGain,
@@ -199,9 +208,9 @@ fun RemoteScreen(
                     modifier = Modifier.weight(1f)
                 )
 
-                // CAPTURE Channel Strip
+                // GAME AUDIO Channel Card (Amber theme)
                 AudioChannelStrip(
-                    title = "CAPTURE",
+                    title = "GAME AUDIO",
                     isCapture = true,
                     isAvailable = isConnected,
                     gain = feedState.captureGain,
@@ -220,17 +229,42 @@ fun RemoteScreen(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // 3. Shortcut Section (2x3 Grid of 6 buttons)
+            // 3. Shortcuts Section (2x3 Grid with Activators and Left/Right Paging)
             ShortcutGridSection(
+                page = currentShortcutPage,
+                totalPages = totalPages,
                 buttonLabels = feedState.buttonLabels,
+                activeShortcuts = activeShortcuts,
+                micMuted = feedState.micMuted,
+                captureMuted = feedState.captureMuted,
+                isListening = isListening,
                 isEnabled = isConnected,
+                onPrevPage = {
+                    if (currentShortcutPage > 0) currentShortcutPage--
+                },
+                onNextPage = {
+                    if (currentShortcutPage < totalPages - 1) currentShortcutPage++
+                },
                 onButtonClick = { id ->
                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    // Toggle active state for visual feedback
+                    activeShortcuts = if (activeShortcuts.contains(id)) {
+                        activeShortcuts - id
+                    } else {
+                        activeShortcuts + id
+                    }
                     onButtonClick(id)
                 },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(0.85f)
+                    .weight(0.95f)
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // 4. Sponsor / Studio Status Bottom Capsule (Matching reference image)
+            SponsorBottomCapsule(
+                onOpenSetup = { showConnectionSheet = true }
             )
         }
 
@@ -288,148 +322,157 @@ fun RemoteScreen(
     }
 }
 
+/**
+ * Top Bar matching the image:
+ * Left: [Connected] green indicator + back icon
+ * Center: STREAM CAPTURE
+ * Right: Setup gear
+ */
 @Composable
-private fun RemoteStatusBar(
+private fun RemoteTopBar(
     connectionStatus: ConnectionStatus,
-    connectedIp: String?,
     latencyMs: Long,
     onBack: () -> Unit,
-    onOpenConnectionSheet: () -> Unit,
+    onOpenSetup: () -> Unit,
     onReconnect: () -> Unit
 ) {
-    Surface(
-        color = Color(0xFF161824),
-        shape = RoundedCornerShape(12.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF262C3E)),
-        modifier = Modifier.fillMaxWidth()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
     ) {
+        // Left: Back button + Connected status indicator
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(
-                    onClick = onBack,
-                    modifier = Modifier
-                        .size(36.dp)
-                        .testTag("remote_back_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back",
-                        tint = Color.White,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-
-                IconButton(
-                    onClick = onBack,
-                    modifier = Modifier
-                        .size(36.dp)
-                        .testTag("remote_switch_role_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Home,
-                        contentDescription = "Switch role",
-                        tint = Color(0xFF93C5FD),
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-
-                Spacer(modifier = Modifier.width(6.dp))
-
-                // Connection State Pill
-                val statusColor = when (connectionStatus) {
-                    ConnectionStatus.CONNECTED -> Color(0xFF10B981)
-                    ConnectionStatus.CONNECTING -> Color(0xFFF59E0B)
-                    ConnectionStatus.SEARCHING -> Color(0xFF3B82F6)
-                    ConnectionStatus.LOST -> Color(0xFFEF4444)
-                }
-
-                Surface(
-                    color = statusColor.copy(alpha = 0.15f),
-                    shape = RoundedCornerShape(14.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, statusColor.copy(alpha = 0.5f)),
-                    modifier = Modifier.clickable(onClick = onOpenConnectionSheet)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Surface(shape = CircleShape, color = statusColor, modifier = Modifier.size(8.dp)) {}
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = connectionStatus.name,
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontWeight = FontWeight.Bold,
-                                color = statusColor,
-                                fontSize = 11.sp
-                            )
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.width(8.dp))
-
-                Text(
-                    text = connectedIp ?: "No Feed",
-                    style = MaterialTheme.typography.bodySmall.copy(
-                        color = Color(0xFF94A3B8),
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp
-                    )
+            IconButton(
+                onClick = onBack,
+                modifier = Modifier
+                    .size(32.dp)
+                    .testTag("remote_back_button")
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Back",
+                    tint = Color(0xFF94A3B8),
+                    modifier = Modifier.size(18.dp)
                 )
             }
 
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (connectionStatus == ConnectionStatus.CONNECTED) {
-                    Text(
-                        text = "$latencyMs ms",
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            color = if (latencyMs < 30) Color(0xFF34D399) else Color(0xFFFBBF24),
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 11.sp
-                        ),
-                        modifier = Modifier.padding(end = 6.dp)
-                    )
-                } else if (connectionStatus == ConnectionStatus.LOST) {
-                    IconButton(
-                        onClick = onReconnect,
-                        modifier = Modifier
-                            .size(36.dp)
-                            .testTag("remote_reconnect_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Refresh,
-                            contentDescription = "Reconnect",
-                            tint = Color(0xFF60A5FA),
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                }
+            Spacer(modifier = Modifier.width(4.dp))
 
+            val statusColor = when (connectionStatus) {
+                ConnectionStatus.CONNECTED -> Color(0xFF22C55E)
+                ConnectionStatus.CONNECTING -> Color(0xFFF59E0B)
+                ConnectionStatus.SEARCHING -> Color(0xFF3B82F6)
+                ConnectionStatus.LOST -> Color(0xFFEF4444)
+            }
+
+            val statusLabel = when (connectionStatus) {
+                ConnectionStatus.CONNECTED -> "[Connected]"
+                ConnectionStatus.CONNECTING -> "[Connecting]"
+                ConnectionStatus.SEARCHING -> "[Searching]"
+                ConnectionStatus.LOST -> "[Lost]"
+            }
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.clickable(onClick = onOpenSetup)
+            ) {
+                Surface(
+                    shape = CircleShape,
+                    color = statusColor,
+                    modifier = Modifier.size(7.dp)
+                ) {}
+                Spacer(modifier = Modifier.width(5.dp))
+                Text(
+                    text = statusLabel,
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontWeight = FontWeight.Bold,
+                        color = statusColor,
+                        fontSize = 12.sp
+                    )
+                )
+            }
+        }
+
+        // Center: Title matching image
+        Text(
+            text = "STREAM CAPTURE",
+            style = MaterialTheme.typography.titleMedium.copy(
+                fontWeight = FontWeight.Black,
+                color = Color.White,
+                letterSpacing = 1.2.sp,
+                fontSize = 14.sp
+            )
+        )
+
+        // Right: Setup gear icon button matching image
+        Row(
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (connectionStatus == ConnectionStatus.CONNECTED && latencyMs > 0) {
+                Text(
+                    text = "${latencyMs}ms",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        color = if (latencyMs < 30) Color(0xFF34D399) else Color(0xFFFBBF24),
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    ),
+                    modifier = Modifier.padding(end = 6.dp)
+                )
+            } else if (connectionStatus == ConnectionStatus.LOST) {
                 IconButton(
-                    onClick = onOpenConnectionSheet,
-                    modifier = Modifier
-                        .size(36.dp)
-                        .testTag("remote_settings_button")
+                    onClick = onReconnect,
+                    modifier = Modifier.size(32.dp)
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Settings,
-                        contentDescription = "Connection Settings",
-                        tint = Color(0xFFCBD5E1),
-                        modifier = Modifier.size(20.dp)
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = "Reconnect",
+                        tint = Color(0xFF60A5FA),
+                        modifier = Modifier.size(16.dp)
                     )
                 }
+            }
+
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(onClick = onOpenSetup)
+                    .padding(horizontal = 6.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Settings,
+                    contentDescription = "Setup",
+                    tint = Color(0xFFCBD5E1),
+                    modifier = Modifier.size(15.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = "Setup",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        color = Color(0xFFCBD5E1),
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 12.sp
+                    )
+                )
             }
         }
     }
 }
 
+/**
+ * Audio Channel Strip Card matching the reference image:
+ * - Rounded card container (#161922 to #11131A)
+ * - Decibel scale labels: 0, -5, -12, -16, -18, -20, -30, -40, -50, -60
+ * - Discrete segmented LED ladder VU meter (Cyan for MIC/AUX, Amber for GAME AUDIO)
+ * - Vertical slider track with illuminated glow line & 3D thumb knob with center indicator
+ * - Bottom illuminated glowing icon (Mic / Gamepad) & channel label
+ */
 @Composable
 private fun AudioChannelStrip(
     title: String,
@@ -447,7 +490,6 @@ private fun AudioChannelStrip(
     onMonitorVolumeChange: (Float) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    // Local fader state to allow fluid dragging without fighting incoming state
     var isDragging by remember { mutableStateOf(false) }
     var localGain by remember { mutableFloatStateOf(gain) }
 
@@ -455,14 +497,17 @@ private fun AudioChannelStrip(
         localGain = gain
     }
 
+    val themeColor = if (isCapture) Color(0xFFF59E0B) else Color(0xFF00E5FF)
+    val dimTrackColor = if (isCapture) Color(0xFF22160E) else Color(0xFF101C2B)
+
     Card(
         colors = CardDefaults.cardColors(
-            containerColor = Color(0xFF161824)
+            containerColor = Color(0xFF131620)
         ),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(18.dp),
         border = androidx.compose.foundation.BorderStroke(
             1.dp,
-            if (isMuted) Color(0xFF7F1D1D) else Color(0xFF262C3E)
+            if (isMuted) Color(0xFFEF4444).copy(alpha = 0.8f) else Color(0xFF242A3B)
         ),
         modifier = modifier
             .fillMaxHeight()
@@ -472,72 +517,84 @@ private fun AudioChannelStrip(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 10.dp, vertical = 10.dp),
+                .padding(horizontal = 10.dp, vertical = 12.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Strip Header
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleSmall.copy(
-                        fontWeight = FontWeight.ExtraBold,
-                        color = if (isCapture) Color(0xFF60A5FA) else Color(0xFF34D399),
-                        letterSpacing = 1.sp
-                    )
-                )
-
-                // Gain dB readout
-                val dbVal = if (localGain <= 0.001f) "-inf dB" else {
-                    val db = 20 * log10(localGain)
-                    String.format("%+.1f dB", db)
-                }
-                Text(
-                    text = dbVal,
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        color = Color(0xFFCBD5E1),
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                )
-            }
-
-            if (!isAvailable) {
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "Unavailable on Feed",
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        color = Color(0xFFF87171),
-                        fontSize = 10.sp
-                    )
-                )
-            }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Fader + Live Level Meter side by side
+            // Main body: Decibel numbers + Segmented LED VU Meter + Vertical Fader
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f),
-                horizontalArrangement = Arrangement.SpaceEvenly,
+                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Tall Vertical Fader
+                // Decibel Labels Column
+                Column(
+                    modifier = Modifier.fillMaxHeight(),
+                    verticalArrangement = Arrangement.SpaceBetween,
+                    horizontalAlignment = Alignment.End
+                ) {
+                    val dbSteps = listOf(0, -5, -12, -16, -18, -20, -30, -40, -50, -60)
+                    dbSteps.forEach { db ->
+                        Text(
+                            text = "$db",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                color = Color(0xFF64748B),
+                                fontSize = 8.5.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold
+                            )
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(6.dp))
+
+                // Segmented LED Ladder VU Meter
+                SegmentedLedLadder(
+                    rmsDb = meter.rms,
+                    peakDb = meter.peak,
+                    isAmber = isCapture,
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .width(14.dp)
+                )
+
+                Spacer(modifier = Modifier.width(6.dp))
+
+                // Decibel reading beside ladder
+                Column(
+                    modifier = Modifier.fillMaxHeight(),
+                    verticalArrangement = Arrangement.SpaceBetween,
+                    horizontalAlignment = Alignment.Start
+                ) {
+                    val dbSteps = listOf(0, -5, -12, -16, -18, -20, -30, -40, -50, -60)
+                    dbSteps.forEach { db ->
+                        Text(
+                            text = "$db",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                color = Color(0xFF475569),
+                                fontSize = 8.5.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                // Vertical Physical Fader
                 Box(
                     modifier = Modifier
-                        .weight(1f)
                         .fillMaxHeight()
-                        .padding(horizontal = 6.dp),
+                        .weight(1f),
                     contentAlignment = Alignment.Center
                 ) {
-                    VerticalFader(
+                    HardwareStyleVerticalFader(
                         value = localGain,
                         enabled = isAvailable,
+                        accentColor = themeColor,
                         onValueChange = {
                             isDragging = true
                             localGain = it
@@ -550,157 +607,174 @@ private fun AudioChannelStrip(
                         tag = "fader_${title.lowercase()}"
                     )
                 }
-
-                // Live Level Meter
-                LevelMeter(
-                    rmsDb = meter.rms,
-                    peakDb = meter.peak,
-                    modifier = Modifier.fillMaxHeight(),
-                    tag = "meter_${title.lowercase()}"
-                )
             }
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Stage 5 Listen Toggle & Local Monitor Slider (CAPTURE channel only)
-            if (isCapture) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+            // Bottom Channel Section: Glowing Icon & Channel Label (Tap to toggle mute)
+            Column(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable(enabled = isAvailable, onClick = onToggleMute)
+                    .padding(horizontal = 6.dp, vertical = 4.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                // Illuminated icon with colored halo glow
+                Surface(
+                    shape = CircleShape,
+                    color = if (isMuted) Color(0xFF7F1D1D) else themeColor.copy(alpha = 0.15f),
+                    modifier = Modifier.size(34.dp)
                 ) {
-                    FilledTonalButton(
-                        onClick = onToggleListen,
-                        enabled = isAvailable,
-                        colors = ButtonDefaults.filledTonalButtonColors(
-                            containerColor = if (isListening) Color(0xFF1E3A8A) else Color(0xFF1F2433),
-                            contentColor = if (isListening) Color(0xFF93C5FD) else Color(0xFF94A3B8)
-                        ),
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(34.dp)
-                            .testTag("listen_toggle_button")
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = if (isMuted) {
+                                if (isCapture) Icons.Default.VolumeMute else Icons.Default.MicOff
+                            } else {
+                                if (isCapture) Icons.Default.SportsEsports else Icons.Default.Mic
+                            },
+                            contentDescription = if (isMuted) "Muted" else title,
+                            tint = if (isMuted) Color(0xFFF87171) else themeColor,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        color = if (isMuted) Color(0xFFEF4444) else Color.White,
+                        fontWeight = FontWeight.Black,
+                        fontSize = 11.5.sp,
+                        letterSpacing = 0.8.sp
+                    )
+                )
+
+                if (isMuted) {
+                    Text(
+                        text = "MUTED",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            color = Color(0xFFEF4444),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 9.sp
+                        )
+                    )
+                }
+            }
+
+            // Optional headphone monitoring for capture
+            if (isCapture) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Surface(
+                    color = if (isListening) Color(0xFF1E3A8A) else Color(0xFF191F2D),
+                    shape = RoundedCornerShape(12.dp),
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        if (isListening) Color(0xFF60A5FA) else Color(0xFF263044)
+                    ),
+                    modifier = Modifier
+                        .clickable(enabled = isAvailable, onClick = onToggleListen)
+                        .testTag("listen_toggle_pill")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
                             imageVector = Icons.Default.Headphones,
                             contentDescription = "Listen",
-                            modifier = Modifier.size(16.dp)
+                            tint = if (isListening) Color(0xFF93C5FD) else Color(0xFF94A3B8),
+                            modifier = Modifier.size(12.dp)
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = if (isListening) "LISTENING" else "LISTEN",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold
+                            text = if (isListening) "MONITOR ON" else "MONITOR",
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isListening) Color.White else Color(0xFFCBD5E1)
                         )
                     }
                 }
-
-                // Local Monitor Volume Slider on Remote
-                if (isListening) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.VolumeDown,
-                            contentDescription = null,
-                            tint = Color(0xFF94A3B8),
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Slider(
-                            value = monitorVolume,
-                            onValueChange = onMonitorVolumeChange,
-                            colors = SliderDefaults.colors(
-                                thumbColor = Color(0xFF60A5FA),
-                                activeTrackColor = Color(0xFF3B82F6),
-                                inactiveTrackColor = Color(0xFF262C3E)
-                            ),
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(20.dp)
-                                .testTag("remote_monitor_volume_slider")
-                        )
-                    }
-
-                    // Audio Stream Telemetry
-                    audioStats?.let { stats ->
-                        Text(
-                            text = "Buf: ${stats.bufferDepthMs}ms • Loss: ${String.format("%.1f", stats.packetLossPercent)}%",
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                color = Color(0xFF64748B),
-                                fontSize = 9.sp,
-                                fontFamily = FontFamily.Monospace
-                            )
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            // Big MUTE Button
-            val muteBgColor by animateColorAsState(
-                if (isMuted) Color(0xFFDC2626) else Color(0xFF1E293B)
-            )
-            val muteTextColor = if (isMuted) Color.White else Color(0xFF94A3B8)
-
-            Button(
-                onClick = onToggleMute,
-                enabled = isAvailable,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = muteBgColor,
-                    contentColor = muteTextColor
-                ),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(46.dp)
-                    .testTag("mute_button_${title.lowercase()}")
-            ) {
-                Icon(
-                    imageVector = if (isMuted) {
-                        if (isCapture) Icons.Default.VolumeMute else Icons.Default.MicOff
-                    } else {
-                        if (isCapture) Icons.Default.VolumeUp else Icons.Default.Mic
-                    },
-                    contentDescription = if (isMuted) "Unmute" else "Mute",
-                    modifier = Modifier.size(20.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = if (isMuted) "MUTED" else "MUTE",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 13.sp
-                )
             }
         }
     }
 }
 
+/**
+ * Segmented LED ladder VU meter with 20 discrete illuminated bars, matching the image:
+ * Cyan bars for Mic/Aux, Amber bars for Game Audio, top segments turn Red for peak clip.
+ */
 @Composable
-private fun VerticalFader(
+private fun SegmentedLedLadder(
+    rmsDb: Float,
+    peakDb: Float,
+    isAmber: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val totalBars = 20
+    val targetFrac = ((rmsDb - (-60f)) / 60f).coerceIn(0f, 1f)
+
+    Column(
+        modifier = modifier
+            .fillMaxHeight()
+            .clip(RoundedCornerShape(3.dp))
+            .background(Color(0xFF0C0E14))
+            .padding(vertical = 2.dp, horizontal = 1.dp),
+        verticalArrangement = Arrangement.SpaceBetween,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        // Render from top (0 dB) down to bottom (-60 dB)
+        for (i in (totalBars - 1) downTo 0) {
+            val barFrac = i.toFloat() / (totalBars - 1).toFloat()
+            val isLit = barFrac <= targetFrac
+
+            val litColor = when {
+                i >= 18 -> Color(0xFFEF4444) // Top clip zone: Red
+                isAmber -> Color(0xFFF59E0B) // Amber
+                else -> Color(0xFF00E5FF)    // Vibrant Cyan
+            }
+
+            val unlitColor = when {
+                isAmber -> Color(0xFF1E150E)
+                else -> Color(0xFF0F1824)
+            }
+
+            Surface(
+                shape = RoundedCornerShape(1.dp),
+                color = if (isLit) litColor else unlitColor,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(3.dp)
+            ) {}
+        }
+    }
+}
+
+/**
+ * Skeuomorphic Vertical Fader:
+ * - Recessed dark channel groove
+ * - Illuminated active neon track
+ * - Physical 3D dark charcoal thumb knob with a glowing horizontal center line
+ */
+@Composable
+private fun HardwareStyleVerticalFader(
     value: Float,
     enabled: Boolean,
+    accentColor: Color,
     onValueChange: (Float) -> Unit,
     onDragEnd: () -> Unit,
     tag: String
 ) {
-    // Always read the latest values inside the long-lived pointerInput block
     val latestValue by rememberUpdatedState(value)
     val latestOnChange by rememberUpdatedState(onValueChange)
     val latestOnEnd by rememberUpdatedState(onDragEnd)
-    val thumbHeight = 26.dp
+    val thumbHeight = 28.dp
 
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxHeight()
-            .width(44.dp)
+            .width(42.dp)
             .testTag(tag)
             .pointerInput(enabled) {
                 if (!enabled) return@pointerInput
@@ -722,138 +796,287 @@ private fun VerticalFader(
         val v = value.coerceIn(0f, 1f)
         val travelDp = maxHeight - thumbHeight
 
-        // Trough
+        // Recessed vertical groove channel
         Box(
             modifier = Modifier
                 .align(Alignment.Center)
                 .width(6.dp)
                 .fillMaxHeight()
                 .clip(RoundedCornerShape(3.dp))
-                .background(Color(0xFF141720))
+                .background(Color(0xFF0A0C11))
+                .border(1.dp, Color(0xFF181C26), RoundedCornerShape(3.dp))
         )
 
-        // Active track: from the bottom up to the thumb centre
+        // Glowing illuminated active track up to the thumb
         Box(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .width(6.dp)
+                .width(4.dp)
                 .height(travelDp * v + thumbHeight / 2)
-                .clip(RoundedCornerShape(3.dp))
-                .background(Color(0xFF3B82F6))
+                .clip(RoundedCornerShape(2.dp))
+                .background(accentColor)
         )
 
-        // Fader cap: moves with the value (top = full, bottom = silent)
+        // 3D Physical Charcoal Fader Knob with Glowing Horizontal Line
         Surface(
-            color = Color(0xFFE2E8F0),
-            shape = RoundedCornerShape(6.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF94A3B8)),
-            shadowElevation = 4.dp,
+            color = Color(0xFF262B38),
+            shape = RoundedCornerShape(7.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF3E475B)),
+            shadowElevation = 6.dp,
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .offset(y = travelDp * (1f - v))
                 .size(width = 38.dp, height = thumbHeight)
         ) {
             Box(contentAlignment = Alignment.Center) {
+                // Horizontal illuminated indicator line matching screenshot
                 Box(
                     modifier = Modifier
-                        .width(20.dp)
-                        .height(2.dp)
-                        .background(Color(0xFF475569))
+                        .width(22.dp)
+                        .height(2.5.dp)
+                        .clip(RoundedCornerShape(1.5.dp))
+                        .background(accentColor)
                 )
             }
         }
     }
 }
 
+/**
+ * 2x3 Shortcuts Grid Section with ACTIVATORS on buttons, and LEFT/RIGHT Paging:
+ * - 6 buttons per page in a 2-column x 3-row layout.
+ * - Activator indicators: illuminated glowing borders and indicator LED dots so you can see what is selected!
+ * - Left/Right navigation buttons (< and >) and swipe gestures to view more shortcuts.
+ */
 @Composable
 private fun ShortcutGridSection(
+    page: Int,
+    totalPages: Int,
     buttonLabels: List<String>,
+    activeShortcuts: Set<Int>,
+    micMuted: Boolean,
+    captureMuted: Boolean,
+    isListening: Boolean,
     isEnabled: Boolean,
+    onPrevPage: () -> Unit,
+    onNextPage: () -> Unit,
     onButtonClick: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // 6 shortcuts per page
+    val startIndex = page * 6
+
+    // Predefined shortcuts configuration
+    data class ShortcutDef(
+        val id: Int,
+        val defaultTitle: String,
+        val glowColor: Color,
+        val isDimmed: Boolean = false
+    )
+
+    val allShortcuts = listOf(
+        // Page 1 (Main Broadcast & Audio)
+        ShortcutDef(1, "START STREAM", Color(0xFFEF4444)), // Red glow like in screenshot
+        ShortcutDef(2, "START REC", Color(0xFF00E5FF)),    // Cyan glow
+        ShortcutDef(3, "MUTE MIC", Color(0xFF00E5FF)),     // Cyan glow (or Red when active)
+        ShortcutDef(4, "END STREAM", Color(0xFFEF4444), isDimmed = true), // Dimmed in screenshot
+        ShortcutDef(5, "SCENE: LIVE", Color(0xFF00E5FF)),  // Cyan glow
+        ShortcutDef(6, "AD READ", Color(0xFFFFFFFF)),      // White glow like in screenshot
+
+        // Page 2 (Camera & PiP Layouts)
+        ShortcutDef(7, "CAMERA PiP", Color(0xFF00E5FF)),
+        ShortcutDef(8, "FLIP CAMERA", Color(0xFF00E5FF)),
+        ShortcutDef(9, "PiP SIZE", Color(0xFFF59E0B)),
+        ShortcutDef(10, "ASPECT RATIO", Color(0xFF00E5FF)),
+        ShortcutDef(11, "PNG OVERLAY", Color(0xFFF59E0B)),
+        ShortcutDef(12, "QUALITY MODE", Color(0xFF00E5FF)),
+
+        // Page 3 (Tools & Presets)
+        ShortcutDef(13, "FIT / FILL", Color(0xFF00E5FF)),
+        ShortcutDef(14, "HUD STATS", Color(0xFF10B981)),
+        ShortcutDef(15, "SCENE: CAM ONLY", Color(0xFFA855F7)),
+        ShortcutDef(16, "MUTE GAME", Color(0xFFEF4444)),
+        ShortcutDef(17, "AUDIO RESET", Color(0xFFFFFFFF)),
+        ShortcutDef(18, "SWITCH ROLE", Color(0xFF00E5FF))
+    )
+
+    val currentShortcuts = (0 until 6).map { idx ->
+        val id = startIndex + idx + 1
+        val def = allShortcuts.find { it.id == id }
+            ?: ShortcutDef(id, "SHORTCUT $id", Color(0xFF00E5FF))
+        val customLabel = buttonLabels.getOrNull(id - 1)
+        if (!customLabel.isNullOrBlank() && !customLabel.startsWith("Button")) {
+            def.copy(defaultTitle = customLabel)
+        } else {
+            def
+        }
+    }
+
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(Color(0xFF161824))
-            .border(1.dp, Color(0xFF262C3E), RoundedCornerShape(16.dp))
-            .padding(10.dp)
+            .pointerInput(Unit) {
+                var dragTotal = 0f
+                detectHorizontalDragGestures(
+                    onDragStart = { dragTotal = 0f },
+                    onDragEnd = {
+                        if (dragTotal > 50f) onPrevPage()
+                        else if (dragTotal < -50f) onNextPage()
+                    },
+                    onHorizontalDrag = { _, dragAmount ->
+                        dragTotal += dragAmount
+                    }
+                )
+            }
     ) {
-        Text(
-            text = "SHORTCUT ACTIONS",
-            style = MaterialTheme.typography.labelSmall.copy(
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF64748B),
-                letterSpacing = 1.sp
-            ),
-            modifier = Modifier.padding(bottom = 8.dp, start = 4.dp)
-        )
-
-        // 2 rows of 3 buttons
-        Column(
-            modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+        // Page Navigation Header with Left & Right controls
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Row(
+            // Left arrow
+            IconButton(
+                onClick = onPrevPage,
+                enabled = page > 0,
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    .size(28.dp)
+                    .testTag("shortcuts_prev_page")
             ) {
-                for (id in 1..3) {
-                    val label = buttonLabels.getOrNull(id - 1) ?: "Button $id"
-                    ShortcutDeckButton(
-                        id = id,
-                        label = label,
-                        isEnabled = isEnabled,
-                        onClick = { onButtonClick(id) },
-                        modifier = Modifier.weight(1f)
-                    )
-                }
+                Icon(
+                    imageVector = Icons.Default.ChevronLeft,
+                    contentDescription = "Previous shortcuts",
+                    tint = if (page > 0) Color(0xFF00E5FF) else Color(0xFF333A4D),
+                    modifier = Modifier.size(20.dp)
+                )
             }
 
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                for (id in 4..6) {
-                    val label = buttonLabels.getOrNull(id - 1) ?: "Button $id"
-                    ShortcutDeckButton(
-                        id = id,
-                        label = label,
-                        isEnabled = isEnabled,
-                        onClick = { onButtonClick(id) },
-                        modifier = Modifier.weight(1f)
+            // Page indicator dots & label
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                for (p in 0 until totalPages) {
+                    val isCur = p == page
+                    Surface(
+                        shape = CircleShape,
+                        color = if (isCur) Color(0xFF00E5FF) else Color(0xFF333A4D),
+                        modifier = Modifier
+                            .padding(horizontal = 3.dp)
+                            .size(if (isCur) 6.dp else 4.dp)
+                    ) {}
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "PAGE ${page + 1} OF $totalPages",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF94A3B8),
+                        fontSize = 10.sp,
+                        letterSpacing = 1.sp
                     )
+                )
+            }
+
+            // Right arrow
+            IconButton(
+                onClick = onNextPage,
+                enabled = page < totalPages - 1,
+                modifier = Modifier
+                    .size(28.dp)
+                    .testTag("shortcuts_next_page")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.ChevronRight,
+                    contentDescription = "More shortcuts",
+                    tint = if (page < totalPages - 1) Color(0xFF00E5FF) else Color(0xFF333A4D),
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        // 2 columns x 3 rows grid of buttons
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            for (row in 0..2) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    for (col in 0..1) {
+                        val itemIndex = row * 2 + col
+                        val shortcut = currentShortcuts[itemIndex]
+
+                        // Determine real active state
+                        val isSelected = when (shortcut.id) {
+                            3 -> micMuted
+                            4 -> isListening
+                            16 -> captureMuted
+                            else -> activeShortcuts.contains(shortcut.id)
+                        }
+
+                        ShortcutActivatorButton(
+                            id = shortcut.id,
+                            title = shortcut.defaultTitle,
+                            glowColor = shortcut.glowColor,
+                            isSelected = isSelected,
+                            isDimmed = shortcut.isDimmed && !isSelected,
+                            isEnabled = isEnabled,
+                            onClick = { onButtonClick(shortcut.id) },
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                        )
+                    }
                 }
             }
         }
     }
 }
 
+/**
+ * Capsule button with an illuminated neon border activator and active state indicator
+ * exactly matching the buttons in the reference screenshot!
+ */
 @Composable
-private fun ShortcutDeckButton(
+private fun ShortcutActivatorButton(
     id: Int,
-    label: String,
+    title: String,
+    glowColor: Color,
+    isSelected: Boolean,
+    isDimmed: Boolean,
     isEnabled: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var isPressed by remember { mutableStateOf(false) }
-    val scale by animateFloatAsState(if (isPressed) 0.94f else 1f)
+    val scale by animateFloatAsState(if (isPressed) 0.95f else 1f)
+
+    // Border color: when selected, high-intensity neon glow; when dimmed, very faint; else cyan/glow
+    val borderColor = when {
+        isSelected -> glowColor
+        isDimmed -> Color(0xFF222838)
+        else -> glowColor.copy(alpha = 0.85f)
+    }
+
+    val borderWidth = if (isSelected) 2.dp else 1.5.dp
 
     Surface(
-        color = if (isEnabled) Color(0xFF1E2436) else Color(0xFF141722),
-        shape = RoundedCornerShape(12.dp),
-        border = androidx.compose.foundation.BorderStroke(
-            1.dp,
-            if (isPressed) Color(0xFF60A5FA) else Color(0xFF2E374E)
-        ),
+        color = when {
+            isSelected -> glowColor.copy(alpha = 0.12f)
+            isDimmed -> Color(0xFF0F121A)
+            else -> Color(0xFF141722)
+        },
+        shape = RoundedCornerShape(14.dp),
+        border = androidx.compose.foundation.BorderStroke(borderWidth, borderColor),
         modifier = modifier
-            .fillMaxHeight()
             .scale(scale)
             .clickable(enabled = isEnabled) {
                 isPressed = true
@@ -862,39 +1085,117 @@ private fun ShortcutDeckButton(
             }
             .testTag("shortcut_button_$id")
     ) {
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(8.dp),
-            verticalArrangement = Arrangement.Center,
-            horizontalAlignment = Alignment.CenterHorizontally
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            contentAlignment = Alignment.Center
         ) {
-            Surface(
-                shape = CircleShape,
-                color = Color(0xFF2B354F),
-                modifier = Modifier.size(24.dp)
+            // Activator LED indicator on top-right when selected
+            if (isSelected) {
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 2.dp, end = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Surface(
+                        shape = CircleShape,
+                        color = glowColor,
+                        modifier = Modifier.size(6.dp)
+                    ) {}
+                }
+            }
+
+            // Button Title in bold all-caps
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontWeight = FontWeight.Bold,
+                    color = when {
+                        isSelected -> Color.White
+                        isDimmed -> Color(0xFF4A5568)
+                        else -> Color(0xFFE2E8F0)
+                    },
+                    fontSize = 12.sp,
+                    letterSpacing = 0.5.sp,
+                    textAlign = TextAlign.Center
+                ),
+                maxLines = 2
+            )
+        }
+    }
+}
+
+/**
+ * Sponsor / Studio status bottom capsule matching the reference image:
+ * [AD] SPONSOR AD PLACEHOLDER - GET 20% OFF NOW! - Learn More >
+ */
+@Composable
+private fun SponsorBottomCapsule(
+    onOpenSetup: () -> Unit
+) {
+    Surface(
+        color = Color(0xFF131722),
+        shape = RoundedCornerShape(14.dp),
+        border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFF00E5FF)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onOpenSetup)
+            .testTag("sponsor_bottom_banner")
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f)
             ) {
-                Box(contentAlignment = Alignment.Center) {
+                // AD Tag badge
+                Surface(
+                    color = Color.Transparent,
+                    shape = RoundedCornerShape(4.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF64748B)),
+                    modifier = Modifier.padding(end = 10.dp)
+                ) {
                     Text(
-                        text = "$id",
+                        text = "AD",
                         style = MaterialTheme.typography.labelSmall.copy(
                             fontWeight = FontWeight.Bold,
-                            color = Color(0xFF93C5FD),
-                            fontSize = 11.sp
+                            color = Color(0xFF94A3B8),
+                            fontSize = 10.sp
+                        ),
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                    )
+                }
+
+                Column {
+                    Text(
+                        text = "SPONSOR AD PLACEHOLDER",
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontWeight = FontWeight.Black,
+                            color = Color.White,
+                            fontSize = 11.sp,
+                            letterSpacing = 0.5.sp
+                        )
+                    )
+                    Text(
+                        text = "GET 20% OFF NOW! - Learn More",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            color = Color(0xFF94A3B8),
+                            fontSize = 10.sp
                         )
                     )
                 }
             }
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = label,
-                style = MaterialTheme.typography.bodySmall.copy(
-                    fontWeight = FontWeight.SemiBold,
-                    color = if (isEnabled) Color.White else Color(0xFF64748B),
-                    fontSize = 11.sp,
-                    textAlign = TextAlign.Center
-                ),
-                maxLines = 1
+
+            Icon(
+                imageVector = Icons.Default.ChevronRight,
+                contentDescription = "Details",
+                tint = Color(0xFF00E5FF),
+                modifier = Modifier.size(18.dp)
             )
         }
     }
@@ -936,7 +1237,6 @@ private fun ConnectionBottomSheet(
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            // Pairing PIN input field
             OutlinedTextField(
                 value = pin,
                 onValueChange = onPinChange,

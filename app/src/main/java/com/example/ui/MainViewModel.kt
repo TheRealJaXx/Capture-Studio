@@ -176,27 +176,74 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         onPermissionDenied = { _uiState.update { it.copy(hasUsbPermission = false) } }
     )
 
-    // Stage 4: Extensible Button Action Registry on Feed
+    // Extensible Button Action Registry on Feed (18 shortcuts across 3 pages)
     val buttonActionRegistry = ButtonActionRegistry().apply {
-        registerAction(1, "Mute All") {
-            feedSetCaptureMute(true)
-            feedSetMicMute(true)
+        // Page 1: Stream & Audio
+        registerAction(1, "START STREAM") {
+            // Live broadcast marker / state toggle
         }
-        registerAction(2, "Reset Gain") {
-            feedSetCaptureGain(1.0f)
-            feedSetMicGain(1.0f)
+        registerAction(2, "START REC") {
+            // Live recording marker / state toggle
         }
-        registerAction(3, "Toggle HUD") {
-            toggleStatsOverlay()
+        registerAction(3, "MUTE MIC") {
+            feedSetMicMute(!audioCaptureEngine.isMicMuted())
         }
-        registerAction(4, "Fit/Fill") {
-            toggleScaleMode()
-        }
-        registerAction(5, "Local Mon") {
+        registerAction(4, "LISTEN MON") {
             feedToggleLocalMonitor()
         }
-        registerAction(6, "PNG Overlay") {
+        registerAction(5, "SCENE: LIVE") {
+            switchToCaptureMode()
+        }
+        registerAction(6, "AD READ") {
             toggleOverlay()
+        }
+
+        // Page 2: Camera & PiP
+        registerAction(7, "CAMERA PiP") {
+            cycleCameraLayout()
+        }
+        registerAction(8, "FLIP CAMERA") {
+            flipCamera()
+        }
+        registerAction(9, "PiP SIZE") {
+            cycleCameraPipSize()
+        }
+        registerAction(10, "ASPECT RATIO") {
+            cycleCameraAspectRatio()
+        }
+        registerAction(11, "PNG OVERLAY") {
+            toggleOverlay()
+        }
+        registerAction(12, "QUALITY MODE") {
+            val modes = _uiState.value.supportedQualityModes
+            if (modes.isNotEmpty()) {
+                val curr = _uiState.value.currentQualityMode
+                val nextIdx = (modes.indexOf(curr) + 1) % modes.size
+                selectQualityMode(modes[nextIdx])
+            }
+        }
+
+        // Page 3: Tools & Presets
+        registerAction(13, "FIT / FILL") {
+            toggleScaleMode()
+        }
+        registerAction(14, "HUD STATS") {
+            toggleStatsOverlay()
+        }
+        registerAction(15, "SCENE: CAM ONLY") {
+            selectCameraOnlyMode()
+        }
+        registerAction(16, "MUTE GAME") {
+            feedSetCaptureMute(!audioCaptureEngine.isCaptureMuted())
+        }
+        registerAction(17, "AUDIO RESET") {
+            feedSetCaptureGain(1.0f)
+            feedSetMicGain(1.0f)
+            feedSetCaptureMute(false)
+            feedSetMicMute(false)
+        }
+        registerAction(18, "END STREAM") {
+            // End stream / marker
         }
     }
 

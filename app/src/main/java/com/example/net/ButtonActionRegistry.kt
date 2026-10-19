@@ -5,7 +5,8 @@ import android.util.Log
 typealias ButtonActionHandler = (buttonId: Int) -> Unit
 
 /**
- * Registry on the Feed device for executing actions triggered by the 6 Remote shortcut buttons.
+ * Registry on the Feed device for executing actions triggered by the Remote shortcut buttons.
+ * Supports multiple pages of shortcuts (18+ buttons).
  */
 class ButtonActionRegistry {
     companion object {
@@ -13,14 +14,33 @@ class ButtonActionRegistry {
     }
 
     private val handlers = mutableMapOf<Int, ButtonActionHandler>()
-    private val buttonLabels = mutableMapOf(
-        1 to "Button 1",
-        2 to "Button 2",
-        3 to "Button 3",
-        4 to "Button 4",
-        5 to "Button 5",
-        6 to "Button 6"
-    )
+    private val buttonLabels = mutableMapOf<Int, String>()
+
+    init {
+        // Default labels for Page 1 (Stream & Audio)
+        buttonLabels[1] = "START STREAM"
+        buttonLabels[2] = "START REC"
+        buttonLabels[3] = "MUTE MIC"
+        buttonLabels[4] = "LISTEN MON"
+        buttonLabels[5] = "SCENE: LIVE"
+        buttonLabels[6] = "AD READ"
+
+        // Default labels for Page 2 (Camera & PiP)
+        buttonLabels[7] = "CAMERA PiP"
+        buttonLabels[8] = "FLIP CAMERA"
+        buttonLabels[9] = "PiP SIZE"
+        buttonLabels[10] = "ASPECT RATIO"
+        buttonLabels[11] = "PNG OVERLAY"
+        buttonLabels[12] = "QUALITY MODE"
+
+        // Default labels for Page 3 (Studio Tools & Presets)
+        buttonLabels[13] = "FIT / FILL"
+        buttonLabels[14] = "HUD STATS"
+        buttonLabels[15] = "SCENE: CAM ONLY"
+        buttonLabels[16] = "MUTE GAME"
+        buttonLabels[17] = "AUDIO RESET"
+        buttonLabels[18] = "END STREAM"
+    }
 
     fun registerAction(buttonId: Int, label: String? = null, handler: ButtonActionHandler) {
         handlers[buttonId] = handler
@@ -32,7 +52,8 @@ class ButtonActionRegistry {
     }
 
     fun getLabels(): List<String> {
-        return (1..6).map { buttonLabels[it] ?: "Button $it" }
+        val maxId = maxOf(18, buttonLabels.keys.maxOrNull() ?: 18)
+        return (1..maxId).map { buttonLabels[it] ?: "Button $it" }
     }
 
     fun execute(buttonId: Int) {
