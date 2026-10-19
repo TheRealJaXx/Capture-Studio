@@ -28,7 +28,12 @@ class RemoteAudioService : Service() {
         @Volatile
         private var running = false
 
+        fun isRunning(): Boolean = running
+
         fun startStreaming(context: Context, host: String, token: String) {
+            if (running) {
+                stopStreaming(context)
+            }
             try {
                 val intent = Intent(context, RemoteAudioService::class.java).apply {
                     action = ACTION_START
@@ -47,6 +52,7 @@ class RemoteAudioService : Service() {
             // Only talk to the service if it is actually running. Sending a stop to a service that was
             // never started could race with a following start and crash the app.
             if (!running) return
+            running = false
             try {
                 context.stopService(Intent(context, RemoteAudioService::class.java))
             } catch (_: Throwable) {

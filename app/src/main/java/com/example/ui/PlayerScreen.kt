@@ -50,6 +50,15 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
+import androidx.compose.material.icons.filled.Cameraswitch
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.PictureInPictureAlt
+import androidx.compose.material.icons.filled.SettingsInputHdmi
+import androidx.compose.ui.draw.clip
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -113,7 +122,15 @@ fun PlayerScreen(
     overlayCy: Float = 0.5f,
     overlayWidth: Float = 0.3f,
     onOverlayTransformChanged: (Float, Float, Float) -> Unit = { _, _, _ -> },
-    onPickOverlay: () -> Unit = {}
+    onPickOverlay: () -> Unit = {},
+    cameraLayout: CameraLayout = CameraLayout.OFF,
+    cameraFront: Boolean = false,
+    onCycleCameraLayout: () -> Unit = {},
+    onFlipCamera: () -> Unit = {},
+    isCameraOnly: Boolean = false,
+    attachedDeviceName: String? = null,
+    onSwitchToCaptureMode: () -> Unit = {},
+    onNavigateToStart: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val activity = context as? Activity
@@ -168,34 +185,101 @@ fun PlayerScreen(
                 userTouchTimestamp = System.currentTimeMillis()
             }
     ) {
-        // SurfaceView directly connected to both UVCCamera native display and MjpegPlayer
-        AndroidView(
-            factory = { ctx ->
-                SurfaceView(ctx).apply {
-                    holder.addCallback(object : SurfaceHolder.Callback {
-                        override fun surfaceCreated(holder: SurfaceHolder) {
-                            mjpegPlayer.onSurfaceCreated(holder)
-                        }
+        // 1. SurfaceView directly connected to both UVCCamera native display and MjpegPlayer
+        if (!isCameraOnly) {
+            val surfaceModifier = when (cameraLayout) {
+                CameraLayout.SPLIT_CAMERA_TOP -> Modifier
+                    .fillMaxWidth()
+                    .fillMaxHeight(0.5f)
+                    .align(Alignment.BottomCenter)
+                CameraLayout.SPLIT_CAMERA_BOTTOM -> Modifier
+                    .fillMaxWidth()
+                    .fillMaxHeight(0.5f)
+                    .align(Alignment.TopCenter)
+                else -> Modifier.fillMaxSize()
+            }
 
-                        override fun surfaceChanged(
-                            holder: SurfaceHolder,
-                            format: Int,
-                            width: Int,
-                            height: Int
-                        ) {
-                            mjpegPlayer.onSurfaceChanged(holder, width, height)
-                        }
+            AndroidView(
+                factory = { ctx ->
+                    SurfaceView(ctx).apply {
+                        holder.addCallback(object : SurfaceHolder.Callback {
+                            override fun surfaceCreated(holder: SurfaceHolder) {
+                                mjpegPlayer.onSurfaceCreated(holder)
+                            }
 
-                        override fun surfaceDestroyed(holder: SurfaceHolder) {
-                            mjpegPlayer.onSurfaceDestroyed()
-                        }
-                    })
-                }
-            },
-            modifier = Modifier
-                .fillMaxSize()
-                .testTag("surface_player_view")
-        )
+                            override fun surfaceChanged(
+                                holder: SurfaceHolder,
+                                format: Int,
+                                width: Int,
+                                height: Int
+                            ) {
+                                mjpegPlayer.onSurfaceChanged(holder, width, height)
+                            }
+
+                            override fun surfaceDestroyed(holder: SurfaceHolder) {
+                                mjpegPlayer.onSurfaceDestroyed()
+                            }
+                        })
+                    }
+                },
+                modifier = surfaceModifier.testTag("surface_player_view")
+            )
+        }
+
+        // 2. Camera Preview (Full Screen, PiP or Split)
+        if (isCameraOnly) {
+            CameraPip(
+                front = cameraFront,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .testTag("camera_full_preview")
+            )
+        } else if (cameraLayout != CameraLayout.OFF) {
+            val pipModifier = when (cameraLayout) {
+                CameraLayout.SPLIT_CAMERA_TOP -> Modifier
+                    .fillMaxWidth()
+                    .fillMaxHeight(0.5f)
+                    .align(Alignment.TopCenter)
+                CameraLayout.SPLIT_CAMERA_BOTTOM -> Modifier
+                    .fillMaxWidth()
+                    .fillMaxHeight(0.5f)
+                    .align(Alignment.BottomCenter)
+                CameraLayout.PIP_TOP_LEFT -> Modifier
+                    .align(Alignment.TopStart)
+                    .padding(12.dp)
+                    .fillMaxWidth(0.28f)
+                    .aspectRatio(4f / 3f)
+                    .clip(RoundedCornerShape(12.dp))
+                    .border(1.dp, Color.White, RoundedCornerShape(12.dp))
+                CameraLayout.PIP_TOP_RIGHT -> Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(12.dp)
+                    .fillMaxWidth(0.28f)
+                    .aspectRatio(4f / 3f)
+                    .clip(RoundedCornerShape(12.dp))
+                    .border(1.dp, Color.White, RoundedCornerShape(12.dp))
+                CameraLayout.PIP_BOTTOM_LEFT -> Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(12.dp)
+                    .fillMaxWidth(0.28f)
+                    .aspectRatio(4f / 3f)
+                    .clip(RoundedCornerShape(12.dp))
+                    .border(1.dp, Color.White, RoundedCornerShape(12.dp))
+                CameraLayout.PIP_BOTTOM_RIGHT -> Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(12.dp)
+                    .fillMaxWidth(0.28f)
+                    .aspectRatio(4f / 3f)
+                    .clip(RoundedCornerShape(12.dp))
+                    .border(1.dp, Color.White, RoundedCornerShape(12.dp))
+                CameraLayout.OFF -> Modifier
+            }
+
+            CameraPip(
+                front = cameraFront,
+                modifier = pipModifier.testTag("camera_pip_preview")
+            )
+        }
 
         // User PNG overlay: drag with one finger, pinch to resize (button 6 on the Remote toggles it)
         PngOverlay(
@@ -210,13 +294,58 @@ fun PlayerScreen(
         // Real-time HUD Performance Stats Overlay
         StatsOverlay(
             stats = stats,
-            resolution = "${currentQualityMode.targetWidth}x${currentQualityMode.targetHeight}",
+            resolution = if (isCameraOnly) "DEVICE CAMERA" else "${currentQualityMode.targetWidth}x${currentQualityMode.targetHeight}",
             isVisible = isStatsOverlayVisible,
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .statusBarsPadding()
                 .padding(top = 16.dp, end = 16.dp)
         )
+
+        // Offer to switch to capture mode banner in Camera-only mode
+        if (isCameraOnly && attachedDeviceName != null) {
+            Surface(
+                color = Color(0xFF1E3A8A).copy(alpha = 0.95f),
+                shape = RoundedCornerShape(14.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF60A5FA)),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(top = 64.dp)
+                    .testTag("switch_to_capture_banner")
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.SettingsInputHdmi,
+                        contentDescription = null,
+                        tint = Color(0xFF93C5FD),
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Capture card attached",
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold
+                        )
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Button(
+                        onClick = onSwitchToCaptureMode,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB)),
+                        modifier = Modifier
+                            .height(28.dp)
+                            .testTag("switch_to_capture_button"),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp)
+                    ) {
+                        Text("Switch to Capture", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
 
         // Top Controls Overlay
         AnimatedVisibility(
@@ -256,6 +385,22 @@ fun PlayerScreen(
                             )
                         }
 
+                        Spacer(modifier = Modifier.width(8.dp))
+
+                        // Switch role / Home button
+                        IconButton(
+                            onClick = onNavigateToStart,
+                            modifier = Modifier
+                                .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                                .testTag("player_home_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Home,
+                                contentDescription = "Switch role",
+                                tint = Color.White
+                            )
+                        }
+
                         Spacer(modifier = Modifier.width(10.dp))
 
                         // Current Mode Pill
@@ -264,8 +409,10 @@ fun PlayerScreen(
                             shape = RoundedCornerShape(20.dp),
                             border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF3B82F6)),
                             modifier = Modifier.clickable {
-                                showQualitySheet = true
-                                userTouchTimestamp = System.currentTimeMillis()
+                                if (!isCameraOnly) {
+                                    showQualitySheet = true
+                                    userTouchTimestamp = System.currentTimeMillis()
+                                }
                             }
                         ) {
                             Row(
@@ -273,14 +420,14 @@ fun PlayerScreen(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.Videocam,
+                                    imageVector = if (isCameraOnly) Icons.Default.Cameraswitch else Icons.Default.Videocam,
                                     contentDescription = null,
                                     tint = Color(0xFF60A5FA),
                                     modifier = Modifier.size(16.dp)
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
-                                    text = currentQualityMode.label,
+                                    text = if (isCameraOnly) "CAMERA ONLY" else currentQualityMode.label,
                                     style = MaterialTheme.typography.labelMedium.copy(
                                         color = Color.White,
                                         fontWeight = FontWeight.Bold
@@ -329,22 +476,65 @@ fun PlayerScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        // Fit/Fill quick button
-                        IconButton(
-                            onClick = {
-                                onToggleScaleMode()
-                                userTouchTimestamp = System.currentTimeMillis()
-                            },
-                            modifier = Modifier
-                                .background(Color.Black.copy(alpha = 0.5f), CircleShape)
-                                .testTag("toggle_scale_mode_button")
-                        ) {
-                            Icon(
-                                imageVector = if (scaleMode == ScaleMode.FIT) Icons.Default.AspectRatio else Icons.Default.FitScreen,
-                                contentDescription = if (scaleMode == ScaleMode.FIT) "Fit Letterbox" else "Fill Screen",
-                                tint = if (scaleMode == ScaleMode.FILL) Color(0xFF60A5FA) else Color.White,
-                                modifier = Modifier.size(20.dp)
-                            )
+                        // Fit/Fill quick button (only in capture mode)
+                        if (!isCameraOnly) {
+                            IconButton(
+                                onClick = {
+                                    onToggleScaleMode()
+                                    userTouchTimestamp = System.currentTimeMillis()
+                                },
+                                modifier = Modifier
+                                    .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                                    .testTag("toggle_scale_mode_button")
+                            ) {
+                                Icon(
+                                    imageVector = if (scaleMode == ScaleMode.FIT) Icons.Default.AspectRatio else Icons.Default.FitScreen,
+                                    contentDescription = if (scaleMode == ScaleMode.FIT) "Fit Letterbox" else "Fill Screen",
+                                    tint = if (scaleMode == ScaleMode.FILL) Color(0xFF60A5FA) else Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+
+                            // Camera layout cycling button
+                            IconButton(
+                                onClick = {
+                                    onCycleCameraLayout()
+                                    userTouchTimestamp = System.currentTimeMillis()
+                                },
+                                modifier = Modifier
+                                    .background(
+                                        if (cameraLayout != CameraLayout.OFF) Color(0xFF1E3A8A).copy(alpha = 0.8f) else Color.Black.copy(alpha = 0.5f),
+                                        CircleShape
+                                    )
+                                    .testTag("toggle_camera_layout_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.PictureInPictureAlt,
+                                    contentDescription = "Camera layout: ${cameraLayout.label}",
+                                    tint = if (cameraLayout != CameraLayout.OFF) Color(0xFF93C5FD) else Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+
+                        // Flip camera button (shown when layout is not OFF, or in camera-only mode)
+                        if (cameraLayout != CameraLayout.OFF || isCameraOnly) {
+                            IconButton(
+                                onClick = {
+                                    onFlipCamera()
+                                    userTouchTimestamp = System.currentTimeMillis()
+                                },
+                                modifier = Modifier
+                                    .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                                    .testTag("flip_camera_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Cameraswitch,
+                                    contentDescription = if (cameraFront) "Front camera" else "Back camera",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
                         }
 
                         // Choose the PNG overlay image
@@ -448,16 +638,18 @@ fun PlayerScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            // Quality button
-                            ControlBarPill(
-                                icon = Icons.Default.Videocam,
-                                label = currentQualityMode.id.uppercase(),
-                                onClick = {
-                                    showQualitySheet = true
-                                    userTouchTimestamp = System.currentTimeMillis()
-                                },
-                                tag = "open_quality_sheet_button"
-                            )
+                            // Quality button (capture mode only)
+                            if (!isCameraOnly) {
+                                ControlBarPill(
+                                    icon = Icons.Default.Videocam,
+                                    label = currentQualityMode.id.uppercase(),
+                                    onClick = {
+                                        showQualitySheet = true
+                                        userTouchTimestamp = System.currentTimeMillis()
+                                    },
+                                    tag = "open_quality_sheet_button"
+                                )
+                            }
 
                             // Audio button
                             ControlBarPill(
@@ -471,17 +663,19 @@ fun PlayerScreen(
                                 tag = "open_audio_sheet_button"
                             )
 
-                            // Fit / Fill toggle button
-                            ControlBarPill(
-                                icon = if (scaleMode == ScaleMode.FIT) Icons.Default.AspectRatio else Icons.Default.FitScreen,
-                                label = if (scaleMode == ScaleMode.FIT) "FIT" else "FILL",
-                                isActive = scaleMode == ScaleMode.FILL,
-                                onClick = {
-                                    onToggleScaleMode()
-                                    userTouchTimestamp = System.currentTimeMillis()
-                                },
-                                tag = "bar_fit_fill_toggle"
-                            )
+                            // Fit / Fill toggle button (capture mode only)
+                            if (!isCameraOnly) {
+                                ControlBarPill(
+                                    icon = if (scaleMode == ScaleMode.FIT) Icons.Default.AspectRatio else Icons.Default.FitScreen,
+                                    label = if (scaleMode == ScaleMode.FIT) "FIT" else "FILL",
+                                    isActive = scaleMode == ScaleMode.FILL,
+                                    onClick = {
+                                        onToggleScaleMode()
+                                        userTouchTimestamp = System.currentTimeMillis()
+                                    },
+                                    tag = "bar_fit_fill_toggle"
+                                )
+                            }
 
                             // Stats HUD toggle button
                             ControlBarPill(

@@ -64,6 +64,9 @@ data class UiState(
     val overlayCx: Float = 0.5f,
     val overlayCy: Float = 0.5f,
     val overlayWidth: Float = 0.3f,
+    val cameraLayout: CameraLayout = CameraLayout.OFF,
+    val cameraFront: Boolean = false,
+    val isCameraOnly: Boolean = false,
 
     // Wireless Feed Server State
     val feedServerIp: String = "127.0.0.1",
@@ -98,6 +101,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val KEY_REMOTE_LISTEN = "pref_remote_listen"
         private const val KEY_REMOTE_VOL = "pref_remote_vol"
         private const val KEY_LAST_FEED_IP = "pref_last_feed_ip"
+        private const val KEY_CAMERA_LAYOUT = "pref_camera_layout"
+        private const val KEY_CAMERA_FRONT = "pref_camera_front"
     }
 
     private val prefs = application.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -219,6 +224,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val savedRemoteVol = prefs.getFloat(KEY_REMOTE_VOL, 1.0f)
         val savedRemoteListen = prefs.getBoolean(KEY_REMOTE_LISTEN, false)
         val lastMode = prefs.getString(KEY_LAST_MODE, null)
+        val savedLayoutOrdinal = prefs.getInt(KEY_CAMERA_LAYOUT, CameraLayout.OFF.ordinal)
+        val savedCameraLayout = CameraLayout.values().getOrElse(savedLayoutOrdinal) { CameraLayout.OFF }
+        val savedCameraFront = prefs.getBoolean(KEY_CAMERA_FRONT, false)
 
         mjpegPlayer.setScaleMode(scale)
         audioCaptureEngine.setVolume(savedVolume)
@@ -234,6 +242,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         val initialScreen = when (lastMode) {
             "FEED" -> CurrentScreen.CONNECT
+            "CAMERA_ONLY" -> CurrentScreen.PLAYER
             "REMOTE" -> CurrentScreen.REMOTE
             else -> CurrentScreen.START
         }
@@ -254,7 +263,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 overlayVisible = prefs.getBoolean("pref_overlay_visible", false),
                 overlayCx = prefs.getFloat("pref_overlay_cx", 0.5f),
                 overlayCy = prefs.getFloat("pref_overlay_cy", 0.5f),
-                overlayWidth = prefs.getFloat("pref_overlay_w", 0.3f)
+                overlayWidth = prefs.getFloat("pref_overlay_w", 0.3f),
+                cameraLayout = savedCameraLayout,
+                cameraFront = savedCameraFront,
+                isCameraOnly = (lastMode == "CAMERA_ONLY")
             )
         }
 
@@ -267,15 +279,54 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // Mode Transitions
     fun selectFeedMode() {
+        stopRemoteSubsystems()
         prefs.edit().putString(KEY_LAST_MODE, "FEED").apply()
-        _uiState.update { it.copy(currentScreen = CurrentScreen.CONNECT) }
+        _uiState.update {
+            it.copy(
+                currentScreen = CurrentScreen.CONNECT,
+                isCameraOnly = false
+            )
+        }
         startFeedSubsystems()
     }
 
+    fun selectCameraOnlyMode() {
+        stopRemoteSubsystems()
+        prefs.edit().putString(KEY_LAST_MODE, "CAMERA_ONLY").apply()
+        _uiState.update {
+            it.copy(
+                currentScreen = CurrentScreen.PLAYER,
+                isCameraOnly = true
+            )
+        }
+        startFeedSubsystems()
+    }
+
+    fun switchToCaptureMode() {
+        _uiState.update { it.copy(isCameraOnly = false) }
+        prefs.edit().putString(KEY_LAST_MODE, "FEED").apply()
+        val dev = _uiState.value.attachedDevice
+        if (dev != null && _uiState.value.hasUsbPermission) {
+            val block = activeCtrlBlock
+            if (block != null) {
+                uvcCaptureEngine.startStream(_uiState.value.currentQualityMode)
+            } else {
+                usbMonitorManager.requestPermission(dev)
+            }
+        } else if (dev != null) {
+            usbMonitorManager.requestPermission(dev)
+        }
+    }
+
     fun selectRemoteMode() {
-        prefs.edit().putString(KEY_LAST_MODE, "REMOTE").apply()
         stopFeedSubsystems()
-        _uiState.update { it.copy(currentScreen = CurrentScreen.REMOTE) }
+        prefs.edit().putString(KEY_LAST_MODE, "REMOTE").apply()
+        _uiState.update {
+            it.copy(
+                currentScreen = CurrentScreen.REMOTE,
+                isCameraOnly = false
+            )
+        }
         startRemoteSubsystems()
     }
 
@@ -283,7 +334,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         stopFeedSubsystems()
         stopRemoteSubsystems()
         prefs.edit().remove(KEY_LAST_MODE).apply()
-        _uiState.update { it.copy(currentScreen = CurrentScreen.START) }
+        _uiState.update {
+            it.copy(
+                currentScreen = CurrentScreen.START,
+                isCameraOnly = false,
+                cameraLayout = CameraLayout.OFF,
+                overlayVisible = false
+            )
+        }
     }
 
     // --- Feed Subsystems ---
@@ -317,9 +375,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         audioCaptureEngine.onMetersCalculated = null
         audioCaptureEngine.onStatus = null
         uvcCaptureEngine.close()
+        activeCtrlBlock = null
         usbMonitorManager.stop()
         audioCaptureEngine.stop()
         mjpegPlayer.stop()
+        try {
+            androidx.camera.lifecycle.ProcessCameraProvider.getInstance(getApplication()).get().unbindAll()
+        } catch (_: Throwable) {
+        }
+        _uiState.update {
+            it.copy(
+                isRemoteConnectedToFeed = false,
+                isCameraOnly = false,
+                overlayVisible = false,
+                cameraLayout = CameraLayout.OFF,
+                playerStats = PlayerStats()
+            )
+        }
     }
 
     private fun startControlServer() {
@@ -543,6 +615,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         stopRemoteAudioStream()
         controlClient?.stop()
         controlClient = null
+        _uiState.update {
+            it.copy(
+                isRemoteListening = false,
+                remoteConnectionStatus = ConnectionStatus.SEARCHING,
+                discoveredFeeds = emptyList(),
+                remoteMicMeter = Protocol.SourceMeter.SILENCE,
+                remoteCaptureMeter = Protocol.SourceMeter.SILENCE
+            )
+        }
     }
 
     fun remoteConnect(host: String, pin: String, token: String? = null) {
@@ -591,6 +672,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun startRemoteAudioStream(host: String, token: String) {
+        RemoteAudioService.stopStreaming(getApplication())
         remoteAudioPlayer?.stop()
         remoteAudioPlayer = null
         val player = RemoteAudioPlayer(getApplication()) { stats ->
@@ -667,7 +749,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 it.copy(
                     attachedDevice = null,
                     hasUsbPermission = false,
-                    currentScreen = if (it.currentScreen == CurrentScreen.PLAYER) CurrentScreen.CONNECT else it.currentScreen,
+                    currentScreen = if (it.isCameraOnly) CurrentScreen.PLAYER else (if (it.currentScreen == CurrentScreen.PLAYER) CurrentScreen.CONNECT else it.currentScreen),
                     supportedQualityModes = emptyList()
                 )
             }
@@ -695,13 +777,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             ?: QualityMode.DEFAULT_720P_60
 
         _uiState.update {
-            it.copy(
-                currentQualityMode = selected,
-                currentScreen = CurrentScreen.PLAYER
-            )
+            it.copy(currentQualityMode = selected)
         }
 
-        uvcCaptureEngine.startStream(selected)
+        if (!_uiState.value.isCameraOnly) {
+            _uiState.update { it.copy(currentScreen = CurrentScreen.PLAYER) }
+            uvcCaptureEngine.startStream(selected)
+        }
     }
 
     private fun onUsbDeviceClosed(device: UsbDevice) {
@@ -709,7 +791,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             uvcCaptureEngine.close()
             activeCtrlBlock = null
             _uiState.update {
-                it.copy(currentScreen = CurrentScreen.CONNECT)
+                it.copy(currentScreen = if (it.isCameraOnly) CurrentScreen.PLAYER else CurrentScreen.CONNECT)
             }
         }
     }
@@ -813,6 +895,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun navigateToConnect() {
         _uiState.update { it.copy(currentScreen = CurrentScreen.CONNECT) }
+    }
+
+    fun cycleCameraLayout() {
+        val next = _uiState.value.cameraLayout.next()
+        _uiState.update { it.copy(cameraLayout = next) }
+        prefs.edit().putInt(KEY_CAMERA_LAYOUT, next.ordinal).apply()
+    }
+
+    fun flipCamera() {
+        val newFront = !_uiState.value.cameraFront
+        _uiState.update { it.copy(cameraFront = newFront) }
+        prefs.edit().putBoolean(KEY_CAMERA_FRONT, newFront).apply()
     }
 
     override fun onCleared() {

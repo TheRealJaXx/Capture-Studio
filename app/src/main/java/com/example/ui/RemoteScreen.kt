@@ -34,6 +34,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.NetworkCheck
@@ -61,6 +62,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -119,9 +121,18 @@ fun RemoteScreen(
 ) {
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
+    var showDisconnectConfirmDialog by remember { mutableStateOf(false) }
+
+    val requestLeave = {
+        if (connectionStatus == ConnectionStatus.CONNECTED) {
+            showDisconnectConfirmDialog = true
+        } else {
+            onNavigateBack()
+        }
+    }
 
     BackHandler {
-        onNavigateBack()
+        requestLeave()
     }
 
     // Keep screen on in Remote mode
@@ -156,7 +167,7 @@ fun RemoteScreen(
                 connectionStatus = connectionStatus,
                 connectedIp = connectedFeedIp,
                 latencyMs = latencyMs,
-                onBack = onNavigateBack,
+                onBack = requestLeave,
                 onOpenConnectionSheet = { showConnectionSheet = true },
                 onReconnect = onReconnect
             )
@@ -242,6 +253,38 @@ fun RemoteScreen(
                 onDismiss = { showConnectionSheet = false }
             )
         }
+
+        // Disconnect confirmation dialog when leaving connected Remote
+        if (showDisconnectConfirmDialog) {
+            AlertDialog(
+                onDismissRequest = { showDisconnectConfirmDialog = false },
+                title = { Text("Disconnect from Feed?") },
+                text = { Text("Disconnect from the current Feed session and return to the Start screen?") },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            showDisconnectConfirmDialog = false
+                            onNavigateBack()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626)),
+                        modifier = Modifier.testTag("confirm_disconnect_button")
+                    ) {
+                        Text("Disconnect")
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = { showDisconnectConfirmDialog = false },
+                        modifier = Modifier.testTag("cancel_disconnect_button")
+                    ) {
+                        Text("Cancel", color = Color.White)
+                    }
+                },
+                containerColor = Color(0xFF1E2232),
+                titleContentColor = Color.White,
+                textContentColor = Color(0xFFCBD5E1)
+            )
+        }
     }
 }
 
@@ -278,6 +321,20 @@ private fun RemoteStatusBar(
                         imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                         contentDescription = "Back",
                         tint = Color.White,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+
+                IconButton(
+                    onClick = onBack,
+                    modifier = Modifier
+                        .size(36.dp)
+                        .testTag("remote_switch_role_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Home,
+                        contentDescription = "Switch role",
+                        tint = Color(0xFF93C5FD),
                         modifier = Modifier.size(20.dp)
                     )
                 }

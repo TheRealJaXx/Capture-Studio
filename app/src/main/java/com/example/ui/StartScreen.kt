@@ -27,11 +27,13 @@ import androidx.compose.material.icons.filled.SettingsInputHdmi
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Videocam
-import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -49,7 +51,8 @@ import androidx.compose.ui.unit.sp
 @Composable
 fun StartScreen(
     onSelectFeed: () -> Unit,
-    onSelectRemote: () -> Unit
+    onSelectRemote: () -> Unit,
+    onSelectCameraOnly: () -> Unit = {}
 ) {
     Box(
         modifier = Modifier
@@ -199,6 +202,32 @@ fun StartScreen(
                         modifier = Modifier.size(24.dp)
                     )
                 }
+            }
+
+            OutlinedButton(
+                onClick = onSelectCameraOnly,
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = Color(0xFF93C5FD)
+                ),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF2563EB).copy(alpha = 0.6f)),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 10.dp)
+                    .testTag("start_camera_only_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.CameraAlt,
+                    contentDescription = null,
+                    tint = Color(0xFF93C5FD),
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Camera only (No capture card)",
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 13.sp
+                )
             }
 
             Spacer(modifier = Modifier.height(16.dp))

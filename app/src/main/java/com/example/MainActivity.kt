@@ -92,6 +92,9 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onSelectRemote = {
                                     viewModel.selectRemoteMode()
+                                },
+                                onSelectCameraOnly = {
+                                    viewModel.selectCameraOnlyMode()
                                 }
                             )
                         }
@@ -110,6 +113,9 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onStartPlayer = {
                                     viewModel.startPlayerManually()
+                                },
+                                onNavigateBack = {
+                                    viewModel.navigateToStart()
                                 }
                             )
                         }
@@ -157,7 +163,11 @@ class MainActivity : ComponentActivity() {
                                     viewModel.dismissFeedbackWarning()
                                 },
                                 onNavigateBack = {
-                                    viewModel.navigateToConnect()
+                                    if (uiState.isCameraOnly) {
+                                        viewModel.navigateToStart()
+                                    } else {
+                                        viewModel.navigateToConnect()
+                                    }
                                 },
                                 overlayUri = uiState.overlayUri,
                                 overlayVisible = uiState.overlayVisible,
@@ -169,6 +179,22 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onPickOverlay = {
                                     pickOverlayLauncher.launch(arrayOf("image/*"))
+                                },
+                                cameraLayout = uiState.cameraLayout,
+                                cameraFront = uiState.cameraFront,
+                                onCycleCameraLayout = {
+                                    viewModel.cycleCameraLayout()
+                                },
+                                onFlipCamera = {
+                                    viewModel.flipCamera()
+                                },
+                                isCameraOnly = uiState.isCameraOnly,
+                                attachedDeviceName = uiState.attachedDevice?.productName ?: uiState.attachedDevice?.deviceName,
+                                onSwitchToCaptureMode = {
+                                    viewModel.switchToCaptureMode()
+                                },
+                                onNavigateToStart = {
+                                    viewModel.navigateToStart()
                                 }
                             )
                         }
