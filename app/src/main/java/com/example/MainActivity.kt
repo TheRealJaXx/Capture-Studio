@@ -182,11 +182,32 @@ class MainActivity : ComponentActivity() {
                                 },
                                 cameraLayout = uiState.cameraLayout,
                                 cameraFront = uiState.cameraFront,
+                                cameraPipSize = uiState.cameraPipSize,
+                                cameraAspectRatio = uiState.cameraAspectRatio,
+                                cameraBorder = uiState.cameraBorder,
                                 onCycleCameraLayout = {
                                     viewModel.cycleCameraLayout()
                                 },
+                                onSelectCameraLayout = {
+                                    viewModel.setCameraLayout(it)
+                                },
                                 onFlipCamera = {
                                     viewModel.flipCamera()
+                                },
+                                onCycleCameraPipSize = {
+                                    viewModel.cycleCameraPipSize()
+                                },
+                                onSelectCameraPipSize = {
+                                    viewModel.setCameraPipSize(it)
+                                },
+                                onCycleCameraAspectRatio = {
+                                    viewModel.cycleCameraAspectRatio()
+                                },
+                                onSelectCameraAspectRatio = {
+                                    viewModel.setCameraAspectRatio(it)
+                                },
+                                onToggleCameraBorder = {
+                                    viewModel.toggleCameraBorder()
                                 },
                                 isCameraOnly = uiState.isCameraOnly,
                                 attachedDeviceName = uiState.attachedDevice?.productName ?: uiState.attachedDevice?.deviceName,

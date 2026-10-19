@@ -66,6 +66,9 @@ data class UiState(
     val overlayWidth: Float = 0.3f,
     val cameraLayout: CameraLayout = CameraLayout.OFF,
     val cameraFront: Boolean = false,
+    val cameraPipSize: CameraPipSize = CameraPipSize.LARGE,
+    val cameraAspectRatio: CameraAspectRatio = CameraAspectRatio.RATIO_4_3,
+    val cameraBorder: Boolean = true,
     val isCameraOnly: Boolean = false,
 
     // Wireless Feed Server State
@@ -103,6 +106,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val KEY_LAST_FEED_IP = "pref_last_feed_ip"
         private const val KEY_CAMERA_LAYOUT = "pref_camera_layout"
         private const val KEY_CAMERA_FRONT = "pref_camera_front"
+        private const val KEY_CAMERA_PIP_SIZE = "pref_camera_pip_size"
+        private const val KEY_CAMERA_ASPECT_RATIO = "pref_camera_aspect_ratio"
+        private const val KEY_CAMERA_BORDER = "pref_camera_border"
     }
 
     private val prefs = application.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -227,6 +233,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val savedLayoutOrdinal = prefs.getInt(KEY_CAMERA_LAYOUT, CameraLayout.OFF.ordinal)
         val savedCameraLayout = CameraLayout.values().getOrElse(savedLayoutOrdinal) { CameraLayout.OFF }
         val savedCameraFront = prefs.getBoolean(KEY_CAMERA_FRONT, false)
+        val savedPipSizeOrdinal = prefs.getInt(KEY_CAMERA_PIP_SIZE, CameraPipSize.LARGE.ordinal)
+        val savedCameraPipSize = CameraPipSize.values().getOrElse(savedPipSizeOrdinal) { CameraPipSize.LARGE }
+        val savedAspectRatioOrdinal = prefs.getInt(KEY_CAMERA_ASPECT_RATIO, CameraAspectRatio.RATIO_4_3.ordinal)
+        val savedCameraAspectRatio = CameraAspectRatio.values().getOrElse(savedAspectRatioOrdinal) { CameraAspectRatio.RATIO_4_3 }
+        val savedCameraBorder = prefs.getBoolean(KEY_CAMERA_BORDER, true)
 
         mjpegPlayer.setScaleMode(scale)
         audioCaptureEngine.setVolume(savedVolume)
@@ -266,6 +277,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 overlayWidth = prefs.getFloat("pref_overlay_w", 0.3f),
                 cameraLayout = savedCameraLayout,
                 cameraFront = savedCameraFront,
+                cameraPipSize = savedCameraPipSize,
+                cameraAspectRatio = savedCameraAspectRatio,
+                cameraBorder = savedCameraBorder,
                 isCameraOnly = (lastMode == "CAMERA_ONLY")
             )
         }
@@ -897,16 +911,49 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(currentScreen = CurrentScreen.CONNECT) }
     }
 
+    fun setCameraLayout(layout: CameraLayout) {
+        _uiState.update { it.copy(cameraLayout = layout) }
+        prefs.edit().putInt(KEY_CAMERA_LAYOUT, layout.ordinal).apply()
+    }
+
     fun cycleCameraLayout() {
         val next = _uiState.value.cameraLayout.next()
-        _uiState.update { it.copy(cameraLayout = next) }
-        prefs.edit().putInt(KEY_CAMERA_LAYOUT, next.ordinal).apply()
+        setCameraLayout(next)
     }
 
     fun flipCamera() {
         val newFront = !_uiState.value.cameraFront
         _uiState.update { it.copy(cameraFront = newFront) }
         prefs.edit().putBoolean(KEY_CAMERA_FRONT, newFront).apply()
+    }
+
+    fun cycleCameraPipSize() {
+        val next = _uiState.value.cameraPipSize.next()
+        setCameraPipSize(next)
+    }
+
+    fun setCameraPipSize(size: CameraPipSize) {
+        _uiState.update { it.copy(cameraPipSize = size) }
+        prefs.edit().putInt(KEY_CAMERA_PIP_SIZE, size.ordinal).apply()
+    }
+
+    fun cycleCameraAspectRatio() {
+        val next = _uiState.value.cameraAspectRatio.next()
+        setCameraAspectRatio(next)
+    }
+
+    fun setCameraAspectRatio(ratio: CameraAspectRatio) {
+        _uiState.update { it.copy(cameraAspectRatio = ratio) }
+        prefs.edit().putInt(KEY_CAMERA_ASPECT_RATIO, ratio.ordinal).apply()
+    }
+
+    fun toggleCameraBorder() {
+        setCameraBorder(!_uiState.value.cameraBorder)
+    }
+
+    fun setCameraBorder(enabled: Boolean) {
+        _uiState.update { it.copy(cameraBorder = enabled) }
+        prefs.edit().putBoolean(KEY_CAMERA_BORDER, enabled).apply()
     }
 
     override fun onCleared() {

@@ -54,10 +54,17 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
+import androidx.compose.material.icons.filled.BorderStyle
+import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Cameraswitch
+import androidx.compose.material.icons.filled.Crop
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.PhotoSizeSelectLarge
 import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.SettingsInputHdmi
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.clip
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -125,8 +132,17 @@ fun PlayerScreen(
     onPickOverlay: () -> Unit = {},
     cameraLayout: CameraLayout = CameraLayout.OFF,
     cameraFront: Boolean = false,
+    cameraPipSize: CameraPipSize = CameraPipSize.LARGE,
+    cameraAspectRatio: CameraAspectRatio = CameraAspectRatio.RATIO_4_3,
+    cameraBorder: Boolean = true,
     onCycleCameraLayout: () -> Unit = {},
+    onSelectCameraLayout: (CameraLayout) -> Unit = {},
     onFlipCamera: () -> Unit = {},
+    onCycleCameraPipSize: () -> Unit = {},
+    onSelectCameraPipSize: (CameraPipSize) -> Unit = {},
+    onCycleCameraAspectRatio: () -> Unit = {},
+    onSelectCameraAspectRatio: (CameraAspectRatio) -> Unit = {},
+    onToggleCameraBorder: () -> Unit = {},
     isCameraOnly: Boolean = false,
     attachedDeviceName: String? = null,
     onSwitchToCaptureMode: () -> Unit = {},
@@ -145,6 +161,7 @@ fun PlayerScreen(
 
     var showQualitySheet by remember { mutableStateOf(false) }
     var showAudioSheet by remember { mutableStateOf(false) }
+    var showCameraSheet by remember { mutableStateOf(false) }
 
     // Keep screen on and apply immersive fullscreen mode
     DisposableEffect(Unit) {
@@ -235,43 +252,46 @@ fun PlayerScreen(
                     .testTag("camera_full_preview")
             )
         } else if (cameraLayout != CameraLayout.OFF) {
+            val cornerShape = RoundedCornerShape(12.dp)
             val pipModifier = when (cameraLayout) {
                 CameraLayout.SPLIT_CAMERA_TOP -> Modifier
                     .fillMaxWidth()
                     .fillMaxHeight(0.5f)
                     .align(Alignment.TopCenter)
+                    .clipToBounds()
                 CameraLayout.SPLIT_CAMERA_BOTTOM -> Modifier
                     .fillMaxWidth()
                     .fillMaxHeight(0.5f)
                     .align(Alignment.BottomCenter)
+                    .clipToBounds()
                 CameraLayout.PIP_TOP_LEFT -> Modifier
                     .align(Alignment.TopStart)
                     .padding(12.dp)
-                    .fillMaxWidth(0.28f)
-                    .aspectRatio(4f / 3f)
-                    .clip(RoundedCornerShape(12.dp))
-                    .border(1.dp, Color.White, RoundedCornerShape(12.dp))
+                    .fillMaxWidth(cameraPipSize.widthFraction)
+                    .aspectRatio(cameraAspectRatio.ratio)
+                    .clip(cornerShape)
+                    .then(if (cameraBorder) Modifier.border(1.dp, Color.White, cornerShape) else Modifier)
                 CameraLayout.PIP_TOP_RIGHT -> Modifier
                     .align(Alignment.TopEnd)
                     .padding(12.dp)
-                    .fillMaxWidth(0.28f)
-                    .aspectRatio(4f / 3f)
-                    .clip(RoundedCornerShape(12.dp))
-                    .border(1.dp, Color.White, RoundedCornerShape(12.dp))
+                    .fillMaxWidth(cameraPipSize.widthFraction)
+                    .aspectRatio(cameraAspectRatio.ratio)
+                    .clip(cornerShape)
+                    .then(if (cameraBorder) Modifier.border(1.dp, Color.White, cornerShape) else Modifier)
                 CameraLayout.PIP_BOTTOM_LEFT -> Modifier
                     .align(Alignment.BottomStart)
                     .padding(12.dp)
-                    .fillMaxWidth(0.28f)
-                    .aspectRatio(4f / 3f)
-                    .clip(RoundedCornerShape(12.dp))
-                    .border(1.dp, Color.White, RoundedCornerShape(12.dp))
+                    .fillMaxWidth(cameraPipSize.widthFraction)
+                    .aspectRatio(cameraAspectRatio.ratio)
+                    .clip(cornerShape)
+                    .then(if (cameraBorder) Modifier.border(1.dp, Color.White, cornerShape) else Modifier)
                 CameraLayout.PIP_BOTTOM_RIGHT -> Modifier
                     .align(Alignment.BottomEnd)
                     .padding(12.dp)
-                    .fillMaxWidth(0.28f)
-                    .aspectRatio(4f / 3f)
-                    .clip(RoundedCornerShape(12.dp))
-                    .border(1.dp, Color.White, RoundedCornerShape(12.dp))
+                    .fillMaxWidth(cameraPipSize.widthFraction)
+                    .aspectRatio(cameraAspectRatio.ratio)
+                    .clip(cornerShape)
+                    .then(if (cameraBorder) Modifier.border(1.dp, Color.White, cornerShape) else Modifier)
                 CameraLayout.OFF -> Modifier
             }
 
@@ -515,6 +535,83 @@ fun PlayerScreen(
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
+
+                            // Quick buttons for Size, Aspect Ratio, and Border when PiP is active
+                            if (cameraLayout != CameraLayout.OFF && !cameraLayout.isSplit) {
+                                IconButton(
+                                    onClick = {
+                                        onCycleCameraPipSize()
+                                        userTouchTimestamp = System.currentTimeMillis()
+                                    },
+                                    modifier = Modifier
+                                        .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                                        .testTag("toggle_camera_pip_size_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.PhotoSizeSelectLarge,
+                                        contentDescription = "PiP size: ${cameraPipSize.label}",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+
+                                IconButton(
+                                    onClick = {
+                                        onCycleCameraAspectRatio()
+                                        userTouchTimestamp = System.currentTimeMillis()
+                                    },
+                                    modifier = Modifier
+                                        .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                                        .testTag("toggle_camera_aspect_ratio_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Crop,
+                                        contentDescription = "Aspect ratio: ${cameraAspectRatio.label}",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+
+                                IconButton(
+                                    onClick = {
+                                        onToggleCameraBorder()
+                                        userTouchTimestamp = System.currentTimeMillis()
+                                    },
+                                    modifier = Modifier
+                                        .background(
+                                            if (cameraBorder) Color(0xFF1E3A8A).copy(alpha = 0.8f) else Color.Black.copy(alpha = 0.5f),
+                                            CircleShape
+                                        )
+                                        .testTag("toggle_camera_border_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.BorderStyle,
+                                        contentDescription = if (cameraBorder) "Border: ON" else "Border: OFF",
+                                        tint = if (cameraBorder) Color(0xFF93C5FD) else Color.White,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+
+                            // Camera settings sheet button
+                            if (cameraLayout != CameraLayout.OFF) {
+                                IconButton(
+                                    onClick = {
+                                        showCameraSheet = true
+                                        userTouchTimestamp = System.currentTimeMillis()
+                                    },
+                                    modifier = Modifier
+                                        .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                                        .testTag("open_camera_settings_sheet_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Tune,
+                                        contentDescription = "Camera settings",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
                         }
 
                         // Flip camera button (shown when layout is not OFF, or in camera-only mode)
@@ -677,6 +774,20 @@ fun PlayerScreen(
                                 )
                             }
 
+                            // Camera settings pill
+                            if (!isCameraOnly) {
+                                ControlBarPill(
+                                    icon = Icons.Default.CameraAlt,
+                                    label = if (cameraLayout == CameraLayout.OFF) "CAM OFF" else "CAM ${cameraPipSize.label.uppercase()} ${cameraAspectRatio.label}",
+                                    isActive = cameraLayout != CameraLayout.OFF,
+                                    onClick = {
+                                        showCameraSheet = true
+                                        userTouchTimestamp = System.currentTimeMillis()
+                                    },
+                                    tag = "bar_camera_settings_toggle"
+                                )
+                            }
+
                             // Stats HUD toggle button
                             ControlBarPill(
                                 icon = Icons.Default.BarChart,
@@ -756,6 +867,27 @@ fun PlayerScreen(
                 onToggleLocalMonitor = onToggleLocalMonitor,
                 onDismiss = {
                     showAudioSheet = false
+                    userTouchTimestamp = System.currentTimeMillis()
+                }
+            )
+        }
+
+        // Camera Settings Sheet
+        if (showCameraSheet) {
+            CameraSettingsSheet(
+                cameraLayout = cameraLayout,
+                cameraPipSize = cameraPipSize,
+                cameraAspectRatio = cameraAspectRatio,
+                cameraBorder = cameraBorder,
+                cameraFront = cameraFront,
+                isCameraOnly = isCameraOnly,
+                onSelectLayout = onSelectCameraLayout,
+                onSelectSize = onSelectCameraPipSize,
+                onSelectAspectRatio = onSelectCameraAspectRatio,
+                onToggleBorder = { onToggleCameraBorder() },
+                onFlipCamera = onFlipCamera,
+                onDismiss = {
+                    showCameraSheet = false
                     userTouchTimestamp = System.currentTimeMillis()
                 }
             )

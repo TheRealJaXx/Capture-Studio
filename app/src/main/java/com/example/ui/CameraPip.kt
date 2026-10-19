@@ -36,6 +36,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -59,6 +60,33 @@ enum class CameraLayout(val label: String, val isSplit: Boolean = false) {
         val all = values()
         val nextIndex = (ordinal + 1) % all.size
         return all[nextIndex]
+    }
+}
+
+enum class CameraPipSize(val label: String, val widthFraction: Float) {
+    SMALL("Small", 0.18f),
+    MEDIUM("Medium", 0.24f),
+    LARGE("Large", 0.30f);
+
+    fun next(): CameraPipSize {
+        val all = values()
+        return all[(ordinal + 1) % all.size]
+    }
+}
+
+enum class CameraAspectRatio(
+    val label: String,
+    val ratio: Float,
+    val description: String
+) {
+    RATIO_16_9("16:9", 16f / 9f, "Widescreen"),
+    RATIO_4_3("4:3", 4f / 3f, "Standard"),
+    RATIO_1_1("1:1", 1f, "Square"),
+    RATIO_9_16("9:16", 9f / 16f, "Vertical");
+
+    fun next(): CameraAspectRatio {
+        val all = values()
+        return all[(ordinal + 1) % all.size]
     }
 }
 
@@ -97,6 +125,7 @@ fun CameraPip(
     Box(
         modifier = modifier
             .background(Color(0xFF161B2C))
+            .clipToBounds()
             .testTag("camera_pip_container"),
         contentAlignment = Alignment.Center
     ) {
