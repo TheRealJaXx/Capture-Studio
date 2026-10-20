@@ -37,6 +37,10 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -54,6 +58,8 @@ fun StartScreen(
     onSelectRemote: () -> Unit,
     onSelectCameraOnly: () -> Unit = {}
 ) {
+    var showTermsSheet by remember { mutableStateOf(false) }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -314,6 +320,35 @@ fun StartScreen(
                         modifier = Modifier.size(24.dp)
                     )
                 }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Text(
+                text = "End User Licence Agreement & Terms",
+                style = MaterialTheme.typography.labelSmall.copy(
+                    color = Color(0xFF64748B),
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 11.sp
+                ),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable { showTermsSheet = true }
+                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                    .testTag("terms_link_button")
+            )
+        }
+
+        if (showTermsSheet) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0xFF0C0E14))
+            ) {
+                EulaScreen(
+                    readOnly = true,
+                    onDismiss = { showTermsSheet = false }
+                )
             }
         }
     }

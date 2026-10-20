@@ -35,6 +35,7 @@ import kotlinx.coroutines.launch
 import java.net.InetAddress
 
 enum class CurrentScreen {
+    EULA,
     START,
     CONNECT,
     PLAYER,
@@ -113,7 +114,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val prefs = application.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-    private val _uiState = MutableStateFlow(UiState())
+    private val _uiState = MutableStateFlow(
+        UiState(
+            currentScreen = if (isEulaAccepted(application)) CurrentScreen.START else CurrentScreen.EULA
+        )
+    )
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
 
     // Low-level engines for Feed
@@ -176,83 +181,37 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         onPermissionDenied = { _uiState.update { it.copy(hasUsbPermission = false) } }
     )
 
-    // Extensible Button Action Registry on Feed (18 shortcuts across 3 pages)
+    // Extensible Button Action Registry on Feed mapped to ShortcutConfig
     val buttonActionRegistry = ButtonActionRegistry().apply {
-        // Page 1: Stream & Audio
-        registerAction(1, "START STREAM") {
-            // Live broadcast marker / state toggle
-        }
-        registerAction(2, "START REC") {
-            // Live recording marker / state toggle
-        }
-        registerAction(3, "MUTE MIC") {
+        registerAction(com.example.net.ShortcutConfig.ACTION_MUTE_MIC) {
             feedSetMicMute(!audioCaptureEngine.isMicMuted())
         }
-        registerAction(4, "LISTEN MON") {
+        registerAction(com.example.net.ShortcutConfig.ACTION_LISTEN_MONITOR) {
             feedToggleLocalMonitor()
         }
-        registerAction(5, "SCENE: LIVE") {
-            switchToCaptureMode()
-        }
-        registerAction(6, "AD READ") {
+        registerAction(com.example.net.ShortcutConfig.ACTION_PNG_OVERLAY) {
             toggleOverlay()
         }
-
-        // Page 2: Camera & PiP
-        registerAction(7, "CAMERA PiP") {
-            cycleCameraLayout()
-        }
-        registerAction(8, "FLIP CAMERA") {
-            flipCamera()
-        }
-        registerAction(9, "PiP SIZE") {
-            cycleCameraPipSize()
-        }
-        registerAction(10, "ASPECT RATIO") {
-            cycleCameraAspectRatio()
-        }
-        registerAction(11, "PNG OVERLAY") {
-            toggleOverlay()
-        }
-        registerAction(12, "QUALITY MODE") {
-            val modes = _uiState.value.supportedQualityModes
-            if (modes.isNotEmpty()) {
-                val curr = _uiState.value.currentQualityMode
-                val nextIdx = (modes.indexOf(curr) + 1) % modes.size
-                selectQualityMode(modes[nextIdx])
-            }
-        }
-
-        // Page 3: Tools & Presets
-        registerAction(13, "FIT / FILL") {
+        registerAction(com.example.net.ShortcutConfig.ACTION_FIT_FILL) {
             toggleScaleMode()
         }
-        registerAction(14, "HUD STATS") {
-            toggleStatsOverlay()
+        registerAction(com.example.net.ShortcutConfig.ACTION_CAMERA_PIP) {
+            cycleCameraLayout()
         }
-        registerAction(15, "SCENE: CAM ONLY") {
-            selectCameraOnlyMode()
+        registerAction(com.example.net.ShortcutConfig.ACTION_FLIP_CAMERA) {
+            flipCamera()
         }
-        registerAction(16, "MUTE GAME") {
-            feedSetCaptureMute(!audioCaptureEngine.isCaptureMuted())
+        registerAction(com.example.net.ShortcutConfig.ACTION_PIP_SIZE) {
+            cycleCameraPipSize()
         }
-        registerAction(17, "AUDIO RESET") {
-            feedSetCaptureGain(1.0f)
-            feedSetMicGain(1.0f)
-            feedSetCaptureMute(false)
-            feedSetMicMute(false)
-        }
-        registerAction(18, "END STREAM") {
-            // End stream / marker
+        registerAction(com.example.net.ShortcutConfig.ACTION_ASPECT_RATIO) {
+            cycleCameraAspectRatio()
         }
     }
 
     // Wireless Feed Control Server & UDP Audio Streamer
     private val audioStreamer = AudioStreamer(application)
     private var controlServer: ControlServer? = null
-
-    // Feed local-monitor state saved when a Remote starts listening, restored when it stops
-    private var localMonitorBeforeListen: Boolean? = null
 
     // Wireless Remote Client & Player
     private var controlClient: ControlClient? = null
@@ -474,7 +433,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 override fun onRemoteDisconnected() {
                     _uiState.update { it.copy(isRemoteConnectedToFeed = false) }
                     audioStreamer.setStreamingEnabled(false)
-                    restoreLocalMonitor()
                 }
 
                 override fun onSetGain(source: String, value: Float) {
@@ -493,8 +451,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
 
-                override fun onButtonClicked(buttonId: Int) {
-                    buttonActionRegistry.execute(buttonId)
+                override fun onButtonClicked(actionId: String) {
+                    buttonActionRegistry.execute(actionId)
                 }
 
                 override fun onSetLocalMonitor(enabled: Boolean) {
@@ -507,17 +465,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     } catch (_: Throwable) {
                     }
                     audioStreamer.setStreamingEnabled(true)
-                    // Auto-disable Feed local monitor to prevent acoustic echo (restored when listening stops)
-                    if (localMonitorBeforeListen == null) {
-                        localMonitorBeforeListen = audioCaptureEngine.isLocalMonitorEnabled()
-                    }
-                    audioCaptureEngine.setLocalMonitorEnabled(false)
                     syncFeedStateToRemote()
                 }
 
                 override fun onAudioStopRequested() {
                     audioStreamer.setStreamingEnabled(false)
-                    restoreLocalMonitor()
                     syncFeedStateToRemote()
                 }
             }
@@ -542,12 +494,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             )
         }
-    }
-
-    private fun restoreLocalMonitor() {
-        localMonitorBeforeListen?.let { audioCaptureEngine.setLocalMonitorEnabled(it) }
-        localMonitorBeforeListen = null
-        syncFeedStateToRemote()
     }
 
     private fun stopControlServer() {
@@ -593,13 +539,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun feedToggleLocalMonitor() {
         val newLocal = !audioCaptureEngine.isLocalMonitorEnabled()
-        localMonitorBeforeListen = null
         audioCaptureEngine.setLocalMonitorEnabled(newLocal)
         syncFeedStateToRemote()
     }
 
     fun feedSetLocalMonitor(enabled: Boolean) {
-        localMonitorBeforeListen = null
         audioCaptureEngine.setLocalMonitorEnabled(enabled)
         syncFeedStateToRemote()
     }
@@ -706,8 +650,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         controlClient?.setMute(source, muted)
     }
 
+    fun remoteButtonClick(actionId: String) {
+        controlClient?.sendButton(actionId)
+    }
+
     fun remoteButtonClick(id: Int) {
-        controlClient?.sendButton(id)
+        controlClient?.sendButton(id.toString())
+    }
+
+    fun remoteSetLocalMonitor(enabled: Boolean) {
+        controlClient?.setLocalMonitor(enabled)
+    }
+
+    fun acceptEula() {
+        com.example.ui.acceptEula(getApplication())
+        _uiState.update { it.copy(currentScreen = CurrentScreen.START) }
     }
 
     fun remoteToggleListen() {

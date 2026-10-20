@@ -32,7 +32,7 @@ interface ControlServerListener {
     fun onRemoteDisconnected()
     fun onSetGain(source: String, value: Float)
     fun onSetMute(source: String, muted: Boolean)
-    fun onButtonClicked(buttonId: Int)
+    fun onButtonClicked(actionId: String)
     fun onSetLocalMonitor(enabled: Boolean)
     fun onAudioStartRequested(remoteIp: String)
     fun onAudioStopRequested()
@@ -302,8 +302,10 @@ class ControlServer(
 
                     Protocol.TYPE_BUTTON -> {
                         if (!isAuthenticated) return
-                        val id = json.optInt("id", 1)
-                        listener.onButtonClicked(id)
+                        val id = json.optString("id", "")
+                        if (id.isNotEmpty()) {
+                            listener.onButtonClicked(id)
+                        }
                     }
 
                     Protocol.TYPE_SET_LOCAL_MONITOR -> {

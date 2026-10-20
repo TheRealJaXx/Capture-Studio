@@ -159,11 +159,15 @@ object Protocol {
         }.toString()
     }
 
-    fun createButtonMessage(id: Int): String {
+    fun createButtonMessage(id: String): String {
         return JSONObject().apply {
             put("t", TYPE_BUTTON)
             put("id", id)
         }.toString()
+    }
+
+    fun createButtonMessage(id: Int): String {
+        return createButtonMessage(id.toString())
     }
 
     fun createSetLocalMonitorMessage(enabled: Boolean): String {

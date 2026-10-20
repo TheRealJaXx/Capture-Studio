@@ -47,5 +47,32 @@ class ExampleUnitTest {
 
         assertEquals(CameraLayout.PIP_TOP_LEFT, CameraLayout.OFF.next())
         assertEquals(CameraLayout.OFF, CameraLayout.SPLIT_CAMERA_BOTTOM.next())
+    @Test
+    fun verifyShortcutConfig() {
+        val enabledPages = com.example.net.ShortcutConfig.getEnabledPages()
+        assertEquals(3, enabledPages.size)
+        assertEquals("STREAM_REC", enabledPages[0].id)
+        assertEquals("PNG_OVERLAY", enabledPages[1].id)
+        assertEquals("CAMERA", enabledPages[2].id)
+
+        // Page A should have 6 buttons: 4 soon + 2 working
+        val pageAButtons = enabledPages[0].buttons
+        assertEquals(6, pageAButtons.size)
+        assertTrue(pageAButtons[0].isSoon)
+        assertTrue(pageAButtons[1].isSoon)
+        assertTrue(pageAButtons[2].isSoon)
+        assertTrue(pageAButtons[3].isSoon)
+        assertFalse(pageAButtons[4].isSoon)
+        assertEquals(com.example.net.ShortcutConfig.ACTION_MUTE_MIC, pageAButtons[4].id)
+        assertEquals(com.example.net.ShortcutConfig.ACTION_LISTEN_MONITOR, pageAButtons[5].id)
+    }
+
+    @Test
+    fun verifyLegalTerms() {
+        assertEquals(1, com.example.ui.LEGAL_TERMS_VERSION)
+        assertTrue(com.example.ui.LEGAL_TERMS_TEXT.contains("END USER LICENCE AGREEMENT"))
+        assertTrue(com.example.ui.LEGAL_TERMS_TEXT.contains("EXCEED THE AMOUNT ACTUALLY PAID BY YOU FOR THE APP"))
+        // Verify R100 was removed as requested
+        assertFalse(com.example.ui.LEGAL_TERMS_TEXT.contains("R100"))
     }
 }

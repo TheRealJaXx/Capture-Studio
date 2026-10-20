@@ -68,7 +68,9 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         CrashReporter.showIfAny(this)
 
-        checkAndRequestSystemPermissions()
+        if (com.example.ui.isEulaAccepted(this)) {
+            checkAndRequestSystemPermissions()
+        }
 
         setContent {
             MyApplicationTheme(darkTheme = true, dynamicColor = false) {
@@ -85,6 +87,19 @@ class MainActivity : ComponentActivity() {
                     }
 
                     when (uiState.currentScreen) {
+                        CurrentScreen.EULA -> {
+                            com.example.ui.EulaScreen(
+                                readOnly = false,
+                                onAccept = {
+                                    viewModel.acceptEula()
+                                    checkAndRequestSystemPermissions()
+                                },
+                                onDismiss = {
+                                    finishAffinity()
+                                }
+                            )
+                        }
+
                         CurrentScreen.START -> {
                             StartScreen(
                                 onSelectFeed = {
@@ -240,6 +255,9 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onButtonClick = { id ->
                                     viewModel.remoteButtonClick(id)
+                                },
+                                onSetLocalMonitor = { enabled ->
+                                    viewModel.remoteSetLocalMonitor(enabled)
                                 },
                                 onToggleListen = {
                                     viewModel.remoteToggleListen()

@@ -353,8 +353,12 @@ class ControlClient(
         sendMessage(Protocol.createSetMuteMessage(source, muted))
     }
 
-    fun sendButton(id: Int) {
+    fun sendButton(id: String) {
         sendMessage(Protocol.createButtonMessage(id))
+    }
+
+    fun sendButton(id: Int) {
+        sendButton(id.toString())
     }
 
     fun startAudioStream() {

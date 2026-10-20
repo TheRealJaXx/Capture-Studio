@@ -111,7 +111,8 @@ fun RemoteScreen(
     monitorVolume: Float,
     onSetGain: (String, Float) -> Unit,
     onSetMute: (String, Boolean) -> Unit,
-    onButtonClick: (Int) -> Unit,
+    onButtonClick: (String) -> Unit,
+    onSetLocalMonitor: (Boolean) -> Unit = {},
     onToggleListen: () -> Unit,
     onSetMonitorVolume: (Float) -> Unit,
     onConnectToFeed: (String, String) -> Unit,
@@ -149,16 +150,16 @@ fun RemoteScreen(
 
     val isConnected = connectionStatus == ConnectionStatus.CONNECTED
 
+    val enabledPages = remember { com.example.net.ShortcutConfig.getEnabledPages() }
+    val totalPages = enabledPages.size
+
     // State for toggled/selected buttons on Remote
     var activeShortcuts by remember {
-        mutableStateOf(
-            setOf(1, 5) // By default START STREAM & SCENE: LIVE selected like in reference image
-        )
+        mutableStateOf(setOf<String>())
     }
 
-    // Current page of shortcuts (0-indexed: Page 0 = 1..6, Page 1 = 7..12, Page 2 = 13..18)
+    // Current page of shortcuts (0-indexed across enabled pages)
     var currentShortcutPage by remember { mutableIntStateOf(0) }
-    val totalPages = 3
 
     Box(
         modifier = Modifier
@@ -232,12 +233,10 @@ fun RemoteScreen(
             // 3. Shortcuts Section (2x3 Grid with Activators and Left/Right Paging)
             ShortcutGridSection(
                 page = currentShortcutPage,
-                totalPages = totalPages,
-                buttonLabels = feedState.buttonLabels,
+                pages = enabledPages,
                 activeShortcuts = activeShortcuts,
                 micMuted = feedState.micMuted,
-                captureMuted = feedState.captureMuted,
-                isListening = isListening,
+                localMonitor = feedState.localMonitor,
                 isEnabled = isConnected,
                 onPrevPage = {
                     if (currentShortcutPage > 0) currentShortcutPage--
@@ -247,13 +246,20 @@ fun RemoteScreen(
                 },
                 onButtonClick = { id ->
                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    // Toggle active state for visual feedback
                     activeShortcuts = if (activeShortcuts.contains(id)) {
                         activeShortcuts - id
                     } else {
                         activeShortcuts + id
                     }
                     onButtonClick(id)
+                },
+                onSetLocalMonitor = { enabled ->
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onSetLocalMonitor(enabled)
+                },
+                onToggleMicMute = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onSetMute(Protocol.SRC_MIC, !feedState.micMuted)
                 },
                 modifier = Modifier
                     .fillMaxWidth()
@@ -844,73 +850,29 @@ private fun HardwareStyleVerticalFader(
 
 /**
  * 2x3 Shortcuts Grid Section with ACTIVATORS on buttons, and LEFT/RIGHT Paging:
- * - 6 buttons per page in a 2-column x 3-row layout.
- * - Activator indicators: illuminated glowing borders and indicator LED dots so you can see what is selected!
- * - Left/Right navigation buttons (< and >) and swipe gestures to view more shortcuts.
+ * - 6 buttons per page in a 2-column x 3-row layout, driven from ShortcutConfig.
+ * - Disabled pages are omitted.
+ * - Empty slots are left blank rather than filled with fake buttons.
+ * - "SOON" tags are shown for unbuilt features.
  */
 @Composable
 private fun ShortcutGridSection(
     page: Int,
-    totalPages: Int,
-    buttonLabels: List<String>,
-    activeShortcuts: Set<Int>,
+    pages: List<com.example.net.ShortcutConfig.ShortcutPageDef>,
+    activeShortcuts: Set<String>,
     micMuted: Boolean,
-    captureMuted: Boolean,
-    isListening: Boolean,
+    localMonitor: Boolean,
     isEnabled: Boolean,
     onPrevPage: () -> Unit,
     onNextPage: () -> Unit,
-    onButtonClick: (Int) -> Unit,
+    onButtonClick: (String) -> Unit,
+    onSetLocalMonitor: (Boolean) -> Unit,
+    onToggleMicMute: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    // 6 shortcuts per page
-    val startIndex = page * 6
-
-    // Predefined shortcuts configuration
-    data class ShortcutDef(
-        val id: Int,
-        val defaultTitle: String,
-        val glowColor: Color,
-        val isDimmed: Boolean = false
-    )
-
-    val allShortcuts = listOf(
-        // Page 1 (Main Broadcast & Audio)
-        ShortcutDef(1, "START STREAM", Color(0xFFEF4444)), // Red glow like in screenshot
-        ShortcutDef(2, "START REC", Color(0xFF00E5FF)),    // Cyan glow
-        ShortcutDef(3, "MUTE MIC", Color(0xFF00E5FF)),     // Cyan glow (or Red when active)
-        ShortcutDef(4, "END STREAM", Color(0xFFEF4444), isDimmed = true), // Dimmed in screenshot
-        ShortcutDef(5, "SCENE: LIVE", Color(0xFF00E5FF)),  // Cyan glow
-        ShortcutDef(6, "AD READ", Color(0xFFFFFFFF)),      // White glow like in screenshot
-
-        // Page 2 (Camera & PiP Layouts)
-        ShortcutDef(7, "CAMERA PiP", Color(0xFF00E5FF)),
-        ShortcutDef(8, "FLIP CAMERA", Color(0xFF00E5FF)),
-        ShortcutDef(9, "PiP SIZE", Color(0xFFF59E0B)),
-        ShortcutDef(10, "ASPECT RATIO", Color(0xFF00E5FF)),
-        ShortcutDef(11, "PNG OVERLAY", Color(0xFFF59E0B)),
-        ShortcutDef(12, "QUALITY MODE", Color(0xFF00E5FF)),
-
-        // Page 3 (Tools & Presets)
-        ShortcutDef(13, "FIT / FILL", Color(0xFF00E5FF)),
-        ShortcutDef(14, "HUD STATS", Color(0xFF10B981)),
-        ShortcutDef(15, "SCENE: CAM ONLY", Color(0xFFA855F7)),
-        ShortcutDef(16, "MUTE GAME", Color(0xFFEF4444)),
-        ShortcutDef(17, "AUDIO RESET", Color(0xFFFFFFFF)),
-        ShortcutDef(18, "SWITCH ROLE", Color(0xFF00E5FF))
-    )
-
-    val currentShortcuts = (0 until 6).map { idx ->
-        val id = startIndex + idx + 1
-        val def = allShortcuts.find { it.id == id }
-            ?: ShortcutDef(id, "SHORTCUT $id", Color(0xFF00E5FF))
-        val customLabel = buttonLabels.getOrNull(id - 1)
-        if (!customLabel.isNullOrBlank() && !customLabel.startsWith("Button")) {
-            def.copy(defaultTitle = customLabel)
-        } else {
-            def
-        }
-    }
+    val totalPages = pages.size
+    val safePageIndex = page.coerceIn(0, (totalPages - 1).coerceAtLeast(0))
+    val currentPageDef = pages.getOrNull(safePageIndex) ?: com.example.net.ShortcutConfig.getEnabledPages().first()
 
     Column(
         modifier = modifier
@@ -940,7 +902,7 @@ private fun ShortcutGridSection(
             // Left arrow
             IconButton(
                 onClick = onPrevPage,
-                enabled = page > 0,
+                enabled = safePageIndex > 0,
                 modifier = Modifier
                     .size(28.dp)
                     .testTag("shortcuts_prev_page")
@@ -948,7 +910,7 @@ private fun ShortcutGridSection(
                 Icon(
                     imageVector = Icons.Default.ChevronLeft,
                     contentDescription = "Previous shortcuts",
-                    tint = if (page > 0) Color(0xFF00E5FF) else Color(0xFF333A4D),
+                    tint = if (safePageIndex > 0) Color(0xFF00E5FF) else Color(0xFF333A4D),
                     modifier = Modifier.size(20.dp)
                 )
             }
@@ -956,7 +918,7 @@ private fun ShortcutGridSection(
             // Page indicator dots & label
             Row(verticalAlignment = Alignment.CenterVertically) {
                 for (p in 0 until totalPages) {
-                    val isCur = p == page
+                    val isCur = p == safePageIndex
                     Surface(
                         shape = CircleShape,
                         color = if (isCur) Color(0xFF00E5FF) else Color(0xFF333A4D),
@@ -967,7 +929,7 @@ private fun ShortcutGridSection(
                 }
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "PAGE ${page + 1} OF $totalPages",
+                    text = "${currentPageDef.title}  •  PAGE ${safePageIndex + 1} OF $totalPages",
                     style = MaterialTheme.typography.labelSmall.copy(
                         fontWeight = FontWeight.Bold,
                         color = Color(0xFF94A3B8),
@@ -980,7 +942,7 @@ private fun ShortcutGridSection(
             // Right arrow
             IconButton(
                 onClick = onNextPage,
-                enabled = page < totalPages - 1,
+                enabled = safePageIndex < totalPages - 1,
                 modifier = Modifier
                     .size(28.dp)
                     .testTag("shortcuts_next_page")
@@ -988,7 +950,7 @@ private fun ShortcutGridSection(
                 Icon(
                     imageVector = Icons.Default.ChevronRight,
                     contentDescription = "More shortcuts",
-                    tint = if (page < totalPages - 1) Color(0xFF00E5FF) else Color(0xFF333A4D),
+                    tint = if (safePageIndex < totalPages - 1) Color(0xFF00E5FF) else Color(0xFF333A4D),
                     modifier = Modifier.size(20.dp)
                 )
             }
@@ -1012,28 +974,46 @@ private fun ShortcutGridSection(
                 ) {
                     for (col in 0..1) {
                         val itemIndex = row * 2 + col
-                        val shortcut = currentShortcuts[itemIndex]
+                        val shortcut = currentPageDef.buttons.getOrNull(itemIndex)
 
-                        // Determine real active state
-                        val isSelected = when (shortcut.id) {
-                            3 -> micMuted
-                            4 -> isListening
-                            16 -> captureMuted
-                            else -> activeShortcuts.contains(shortcut.id)
+                        if (shortcut != null) {
+                            val isSelected = when (shortcut.id) {
+                                com.example.net.ShortcutConfig.ACTION_MUTE_MIC -> micMuted
+                                com.example.net.ShortcutConfig.ACTION_LISTEN_MONITOR -> localMonitor
+                                else -> activeShortcuts.contains(shortcut.id)
+                            }
+
+                            ShortcutActivatorButton(
+                                id = shortcut.id,
+                                title = shortcut.label,
+                                glowColor = Color(shortcut.glowColorArgb),
+                                isSelected = isSelected,
+                                isDimmed = shortcut.isSoon || (!shortcut.isClickable && !isSelected),
+                                isSoon = shortcut.isSoon,
+                                isEnabled = isEnabled && shortcut.isClickable,
+                                onClick = {
+                                    if (shortcut.isSoon) {
+                                        // Dimmed and non-clickable with SOON tag, don't send any action
+                                    } else if (shortcut.id == com.example.net.ShortcutConfig.ACTION_LISTEN_MONITOR) {
+                                        onSetLocalMonitor(!localMonitor)
+                                    } else if (shortcut.id == com.example.net.ShortcutConfig.ACTION_MUTE_MIC) {
+                                        onToggleMicMute()
+                                    } else {
+                                        onButtonClick(shortcut.id)
+                                    }
+                                },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight()
+                            )
+                        } else {
+                            // Empty slot: leave empty, not filled with fake buttons
+                            Spacer(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight()
+                            )
                         }
-
-                        ShortcutActivatorButton(
-                            id = shortcut.id,
-                            title = shortcut.defaultTitle,
-                            glowColor = shortcut.glowColor,
-                            isSelected = isSelected,
-                            isDimmed = shortcut.isDimmed && !isSelected,
-                            isEnabled = isEnabled,
-                            onClick = { onButtonClick(shortcut.id) },
-                            modifier = Modifier
-                                .weight(1f)
-                                .fillMaxHeight()
-                        )
                     }
                 }
             }
@@ -1043,15 +1023,16 @@ private fun ShortcutGridSection(
 
 /**
  * Capsule button with an illuminated neon border activator and active state indicator
- * exactly matching the buttons in the reference screenshot!
+ * matching the buttons in the reference screenshot!
  */
 @Composable
 private fun ShortcutActivatorButton(
-    id: Int,
+    id: String,
     title: String,
     glowColor: Color,
     isSelected: Boolean,
     isDimmed: Boolean,
+    isSoon: Boolean = false,
     isEnabled: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
@@ -1059,7 +1040,6 @@ private fun ShortcutActivatorButton(
     var isPressed by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(if (isPressed) 0.95f else 1f)
 
-    // Border color: when selected, high-intensity neon glow; when dimmed, very faint; else cyan/glow
     val borderColor = when {
         isSelected -> glowColor
         isDimmed -> Color(0xFF222838)
@@ -1091,8 +1071,25 @@ private fun ShortcutActivatorButton(
                 .padding(horizontal = 8.dp, vertical = 6.dp),
             contentAlignment = Alignment.Center
         ) {
-            // Activator LED indicator on top-right when selected
-            if (isSelected) {
+            // "SOON" tag for placeholder buttons
+            if (isSoon) {
+                Surface(
+                    shape = RoundedCornerShape(4.dp),
+                    color = Color(0xFF262D3D),
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 2.dp, end = 2.dp)
+                ) {
+                    Text(
+                        text = "SOON",
+                        color = Color(0xFF94A3B8),
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                    )
+                }
+            } else if (isSelected) {
+                // Activator LED indicator on top-right when selected
                 Row(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
