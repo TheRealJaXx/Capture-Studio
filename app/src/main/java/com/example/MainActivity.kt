@@ -107,9 +107,6 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onSelectRemote = {
                                     viewModel.selectRemoteMode()
-                                },
-                                onSelectCameraOnly = {
-                                    viewModel.selectCameraOnlyMode()
                                 }
                             )
                         }
@@ -178,11 +175,7 @@ class MainActivity : ComponentActivity() {
                                     viewModel.dismissFeedbackWarning()
                                 },
                                 onNavigateBack = {
-                                    if (uiState.isCameraOnly) {
-                                        viewModel.navigateToStart()
-                                    } else {
-                                        viewModel.navigateToConnect()
-                                    }
+                                    viewModel.navigateToStart()
                                 },
                                 overlayUri = uiState.overlayUri,
                                 overlayVisible = uiState.overlayVisible,

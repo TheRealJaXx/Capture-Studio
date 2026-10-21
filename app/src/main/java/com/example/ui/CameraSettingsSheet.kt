@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Crop
+import androidx.compose.material.icons.filled.FitScreen
 import androidx.compose.material.icons.filled.NorthEast
 import androidx.compose.material.icons.filled.NorthWest
 import androidx.compose.material.icons.filled.PhotoSizeSelectLarge
@@ -66,7 +67,7 @@ fun CameraSettingsSheet(
     cameraAspectRatio: CameraAspectRatio,
     cameraBorder: Boolean,
     cameraFront: Boolean,
-    isCameraOnly: Boolean,
+    isCameraOnly: Boolean = false,
     onSelectLayout: (CameraLayout) -> Unit,
     onSelectSize: (CameraPipSize) -> Unit,
     onSelectAspectRatio: (CameraAspectRatio) -> Unit,
@@ -136,76 +137,75 @@ fun CameraSettingsSheet(
             HorizontalDivider(color = Color(0xFF272B3B))
             Spacer(modifier = Modifier.height(16.dp))
 
-            // 1. Layout Mode (only if not camera-only)
-            if (!isCameraOnly) {
-                Text(
-                    text = "CAMERA LAYOUT",
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        color = Color(0xFF93C5FD),
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 1.sp
-                    )
+            // 1. Layout Mode
+            Text(
+                text = "CAMERA LAYOUT",
+                style = MaterialTheme.typography.labelSmall.copy(
+                    color = Color(0xFF93C5FD),
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.sp
                 )
-                Spacer(modifier = Modifier.height(8.dp))
+            )
+            Spacer(modifier = Modifier.height(8.dp))
 
-                val scrollState = rememberScrollState()
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(scrollState),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    CameraLayout.values().forEach { layout ->
-                        val isSelected = cameraLayout == layout
-                        val icon: ImageVector = when (layout) {
-                            CameraLayout.OFF -> Icons.Default.VideocamOff
-                            CameraLayout.PIP_TOP_LEFT -> Icons.Default.NorthWest
-                            CameraLayout.PIP_TOP_RIGHT -> Icons.Default.NorthEast
-                            CameraLayout.PIP_BOTTOM_LEFT -> Icons.Default.SouthWest
-                            CameraLayout.PIP_BOTTOM_RIGHT -> Icons.Default.SouthEast
-                            CameraLayout.SPLIT_CAMERA_TOP -> Icons.Default.VerticalAlignTop
-                            CameraLayout.SPLIT_CAMERA_BOTTOM -> Icons.Default.VerticalAlignBottom
-                        }
+            val scrollState = rememberScrollState()
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(scrollState),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                CameraLayout.values().forEach { layout ->
+                    val isSelected = cameraLayout == layout
+                    val icon: ImageVector = when (layout) {
+                        CameraLayout.OFF -> Icons.Default.VideocamOff
+                        CameraLayout.PIP_TOP_LEFT -> Icons.Default.NorthWest
+                        CameraLayout.PIP_TOP_RIGHT -> Icons.Default.NorthEast
+                        CameraLayout.PIP_BOTTOM_LEFT -> Icons.Default.SouthWest
+                        CameraLayout.PIP_BOTTOM_RIGHT -> Icons.Default.SouthEast
+                        CameraLayout.SPLIT_CAMERA_TOP -> Icons.Default.VerticalAlignTop
+                        CameraLayout.SPLIT_CAMERA_BOTTOM -> Icons.Default.VerticalAlignBottom
+                        CameraLayout.FULL_SCREEN -> Icons.Default.FitScreen
+                    }
 
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = if (isSelected) Color(0xFF2563EB) else Color(0xFF1E2230),
-                            border = androidx.compose.foundation.BorderStroke(
-                                1.dp,
-                                if (isSelected) Color(0xFF60A5FA) else Color(0xFF333A4D)
-                            ),
-                            modifier = Modifier
-                                .clickable { onSelectLayout(layout) }
-                                .testTag("select_camera_layout_${layout.name}")
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (isSelected) Color(0xFF2563EB) else Color(0xFF1E2230),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            if (isSelected) Color(0xFF60A5FA) else Color(0xFF333A4D)
+                        ),
+                        modifier = Modifier
+                            .clickable { onSelectLayout(layout) }
+                            .testTag("select_camera_layout_${layout.name}")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = icon,
-                                    contentDescription = null,
-                                    tint = if (isSelected) Color.White else Color(0xFF94A3B8),
-                                    modifier = Modifier.size(16.dp)
+                            Icon(
+                                imageVector = icon,
+                                contentDescription = null,
+                                tint = if (isSelected) Color.White else Color(0xFF94A3B8),
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = layout.label,
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    color = if (isSelected) Color.White else Color(0xFFE2E8F0),
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
                                 )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = layout.label,
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        color = if (isSelected) Color.White else Color(0xFFE2E8F0),
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
-                                    )
-                                )
-                            }
+                            )
                         }
                     }
                 }
-
-                Spacer(modifier = Modifier.height(20.dp))
             }
 
+            Spacer(modifier = Modifier.height(20.dp))
+
             // 2. PiP Size (Small / Medium / Large)
-            if (!cameraLayout.isSplit && cameraLayout != CameraLayout.OFF && !isCameraOnly) {
+            if (!cameraLayout.isSplit && cameraLayout != CameraLayout.OFF && cameraLayout != CameraLayout.FULL_SCREEN) {
                 Text(
                     text = "PIP SIZE",
                     style = MaterialTheme.typography.labelSmall.copy(

@@ -55,8 +55,7 @@ import androidx.compose.ui.unit.sp
 @Composable
 fun StartScreen(
     onSelectFeed: () -> Unit,
-    onSelectRemote: () -> Unit,
-    onSelectCameraOnly: () -> Unit = {}
+    onSelectRemote: () -> Unit
 ) {
     var showTermsSheet by remember { mutableStateOf(false) }
 
@@ -176,7 +175,7 @@ fun StartScreen(
                         Spacer(modifier = Modifier.height(4.dp))
 
                         Text(
-                            text = "Plug in HDMI capture card. Plays video/audio locally & hosts the wireless control server.",
+                            text = "Live feed player with camera PiPs, split & fullscreen views, and PNG overlays. Connect HDMI capture card anytime. Hosts wireless control server.",
                             style = MaterialTheme.typography.bodySmall.copy(
                                 color = Color(0xFF94A3B8),
                                 fontSize = 12.sp
@@ -190,7 +189,7 @@ fun StartScreen(
                             shape = RoundedCornerShape(6.dp)
                         ) {
                             Text(
-                                text = "HOST / VIDEO PLAYER",
+                                text = "HOST / STUDIO PLAYER",
                                 style = MaterialTheme.typography.labelSmall.copy(
                                     color = Color(0xFF60A5FA),
                                     fontWeight = FontWeight.Bold,
@@ -208,32 +207,6 @@ fun StartScreen(
                         modifier = Modifier.size(24.dp)
                     )
                 }
-            }
-
-            OutlinedButton(
-                onClick = onSelectCameraOnly,
-                colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = Color(0xFF93C5FD)
-                ),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF2563EB).copy(alpha = 0.6f)),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 10.dp)
-                    .testTag("start_camera_only_button")
-            ) {
-                Icon(
-                    imageVector = Icons.Default.CameraAlt,
-                    contentDescription = null,
-                    tint = Color(0xFF93C5FD),
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "Camera only (No capture card)",
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 13.sp
-                )
             }
 
             Spacer(modifier = Modifier.height(16.dp))

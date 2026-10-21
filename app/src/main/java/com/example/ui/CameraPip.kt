@@ -54,7 +54,8 @@ enum class CameraLayout(val label: String, val isSplit: Boolean = false) {
     PIP_BOTTOM_LEFT("PiP Bottom Left", isSplit = false),
     PIP_BOTTOM_RIGHT("PiP Bottom Right", isSplit = false),
     SPLIT_CAMERA_TOP("Split Top", isSplit = true),
-    SPLIT_CAMERA_BOTTOM("Split Bottom", isSplit = true);
+    SPLIT_CAMERA_BOTTOM("Split Bottom", isSplit = true),
+    FULL_SCREEN("Full Screen", isSplit = false);
 
     fun next(): CameraLayout {
         val all = values()

@@ -258,8 +258,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         val initialScreen = when (lastMode) {
-            "FEED" -> CurrentScreen.CONNECT
-            "CAMERA_ONLY" -> CurrentScreen.PLAYER
+            "FEED", "CAMERA_ONLY" -> CurrentScreen.PLAYER
             "REMOTE" -> CurrentScreen.REMOTE
             else -> CurrentScreen.START
         }
@@ -286,7 +285,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 cameraPipSize = savedCameraPipSize,
                 cameraAspectRatio = savedCameraAspectRatio,
                 cameraBorder = savedCameraBorder,
-                isCameraOnly = (lastMode == "CAMERA_ONLY")
+                isCameraOnly = false
             )
         }
 
@@ -303,7 +302,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         prefs.edit().putString(KEY_LAST_MODE, "FEED").apply()
         _uiState.update {
             it.copy(
-                currentScreen = CurrentScreen.CONNECT,
+                currentScreen = CurrentScreen.PLAYER,
                 isCameraOnly = false
             )
         }
@@ -311,15 +310,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun selectCameraOnlyMode() {
-        stopRemoteSubsystems()
-        prefs.edit().putString(KEY_LAST_MODE, "CAMERA_ONLY").apply()
-        _uiState.update {
-            it.copy(
-                currentScreen = CurrentScreen.PLAYER,
-                isCameraOnly = true
-            )
-        }
-        startFeedSubsystems()
+        selectFeedMode()
     }
 
     fun switchToCaptureMode() {
@@ -767,7 +758,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 it.copy(
                     attachedDevice = null,
                     hasUsbPermission = false,
-                    currentScreen = if (it.isCameraOnly) CurrentScreen.PLAYER else (if (it.currentScreen == CurrentScreen.PLAYER) CurrentScreen.CONNECT else it.currentScreen),
                     supportedQualityModes = emptyList()
                 )
             }
@@ -780,7 +770,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update {
             it.copy(
                 attachedDevice = device,
-                hasUsbPermission = true
+                hasUsbPermission = true,
+                currentScreen = CurrentScreen.PLAYER
             )
         }
 
@@ -798,19 +789,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             it.copy(currentQualityMode = selected)
         }
 
-        if (!_uiState.value.isCameraOnly) {
-            _uiState.update { it.copy(currentScreen = CurrentScreen.PLAYER) }
-            uvcCaptureEngine.startStream(selected)
-        }
+        uvcCaptureEngine.startStream(selected)
     }
 
     private fun onUsbDeviceClosed(device: UsbDevice) {
         if (_uiState.value.attachedDevice?.deviceId == device.deviceId) {
             uvcCaptureEngine.close()
             activeCtrlBlock = null
-            _uiState.update {
-                it.copy(currentScreen = if (it.isCameraOnly) CurrentScreen.PLAYER else CurrentScreen.CONNECT)
-            }
         }
     }
 
