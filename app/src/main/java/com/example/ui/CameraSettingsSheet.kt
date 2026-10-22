@@ -67,6 +67,7 @@ fun CameraSettingsSheet(
     cameraAspectRatio: CameraAspectRatio,
     cameraBorder: Boolean,
     cameraFront: Boolean,
+    hasUsbCapture: Boolean = true,
     isCameraOnly: Boolean = false,
     onSelectLayout: (CameraLayout) -> Unit,
     onSelectSize: (CameraPipSize) -> Unit,
@@ -106,14 +107,18 @@ fun CameraSettingsSheet(
                     Spacer(modifier = Modifier.width(10.dp))
                     Column {
                         Text(
-                            text = "Camera & PiP Settings",
+                            text = if (hasUsbCapture) "Camera PiP Settings" else "Live Camera & PiP Settings",
                             style = MaterialTheme.typography.titleMedium.copy(
                                 fontWeight = FontWeight.Bold,
                                 color = Color.White
                             )
                         )
                         Text(
-                            text = "Layout, sizing, aspect crop and border",
+                            text = if (hasUsbCapture) {
+                                "PiP overlay, sizing, aspect crop and border"
+                            } else {
+                                "Main: ${if (cameraFront) "Front" else "Back"} lens • PiP: ${if (!cameraFront) "Front" else "Back"} lens"
+                            },
                             style = MaterialTheme.typography.bodySmall.copy(
                                 color = Color(0xFF94A3B8),
                                 fontSize = 12.sp
@@ -398,14 +403,18 @@ fun CameraSettingsSheet(
                     ) {
                         Column {
                             Text(
-                                text = "Camera Lens",
+                                text = if (hasUsbCapture) "Camera Lens" else "Main Camera Lens",
                                 style = MaterialTheme.typography.bodySmall.copy(
                                     fontWeight = FontWeight.Bold,
                                     color = Color.White
                                 )
                             )
                             Text(
-                                text = if (cameraFront) "Front (Selfie)" else "Back camera",
+                                text = if (hasUsbCapture) {
+                                    if (cameraFront) "Front (Selfie)" else "Back camera"
+                                } else {
+                                    "${if (cameraFront) "Front" else "Back"} (PiP: ${if (!cameraFront) "Front" else "Back"})"
+                                },
                                 style = MaterialTheme.typography.labelSmall.copy(
                                     color = Color(0xFF93C5FD),
                                     fontSize = 11.sp

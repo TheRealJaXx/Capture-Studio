@@ -305,6 +305,31 @@ fun ConnectScreen(
                             }
                         }
                     } else {
+                        Button(
+                            onClick = onStartPlayer,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF2563EB),
+                                contentColor = Color.White
+                            ),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("open_studio_feed_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.PlayArrow,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                "Open Studio Feed (Camera & Overlays)",
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
                         OutlinedButton(
                             onClick = onRequestUsbPermission,
                             colors = ButtonDefaults.outlinedButtonColors(

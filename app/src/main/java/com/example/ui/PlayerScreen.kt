@@ -82,6 +82,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -151,6 +152,12 @@ fun PlayerScreen(
     val context = LocalContext.current
     val activity = context as? Activity
 
+    val studioCameraState = rememberStudioCameraState(
+        hasUsbCapture = attachedDeviceName != null,
+        mainFront = cameraFront,
+        cameraLayout = cameraLayout
+    )
+
     BackHandler {
         onNavigateBack()
     }
@@ -202,8 +209,10 @@ fun PlayerScreen(
                 userTouchTimestamp = System.currentTimeMillis()
             }
     ) {
-        // 1. SurfaceView directly connected to both UVCCamera native display and MjpegPlayer
-        if (!isCameraOnly) {
+        // 1. Primary Full-Screen View:
+        // - If USB capture card is connected: SurfaceView for MjpegPlayer
+        // - If NO USB capture card: Main Camera is rendered FULL SCREEN
+        if (attachedDeviceName != null) {
             val surfaceModifier = when (cameraLayout) {
                 CameraLayout.SPLIT_CAMERA_TOP -> Modifier
                     .fillMaxWidth()
@@ -216,42 +225,63 @@ fun PlayerScreen(
                 else -> Modifier.fillMaxSize()
             }
 
+            if (cameraLayout != CameraLayout.FULL_SCREEN) {
+                AndroidView(
+                    factory = { ctx ->
+                        SurfaceView(ctx).apply {
+                            holder.addCallback(object : SurfaceHolder.Callback {
+                                override fun surfaceCreated(holder: SurfaceHolder) {
+                                    mjpegPlayer.onSurfaceCreated(holder)
+                                }
+
+                                override fun surfaceChanged(
+                                    holder: SurfaceHolder,
+                                    format: Int,
+                                    width: Int,
+                                    height: Int
+                                ) {
+                                    mjpegPlayer.onSurfaceChanged(holder, width, height)
+                                }
+
+                                override fun surfaceDestroyed(holder: SurfaceHolder) {
+                                    mjpegPlayer.onSurfaceDestroyed()
+                                }
+                            })
+                        }
+                    },
+                    modifier = surfaceModifier.testTag("surface_player_view")
+                )
+            }
+        } else {
+            // Main camera is full screen when no USB device is connected
+            val mainCameraModifier = when (cameraLayout) {
+                CameraLayout.SPLIT_CAMERA_TOP -> Modifier
+                    .fillMaxWidth()
+                    .fillMaxHeight(0.5f)
+                    .align(Alignment.BottomCenter)
+                CameraLayout.SPLIT_CAMERA_BOTTOM -> Modifier
+                    .fillMaxWidth()
+                    .fillMaxHeight(0.5f)
+                    .align(Alignment.TopCenter)
+                else -> Modifier.fillMaxSize()
+            }
+
             AndroidView(
-                factory = { ctx ->
-                    SurfaceView(ctx).apply {
-                        holder.addCallback(object : SurfaceHolder.Callback {
-                            override fun surfaceCreated(holder: SurfaceHolder) {
-                                mjpegPlayer.onSurfaceCreated(holder)
-                            }
-
-                            override fun surfaceChanged(
-                                holder: SurfaceHolder,
-                                format: Int,
-                                width: Int,
-                                height: Int
-                            ) {
-                                mjpegPlayer.onSurfaceChanged(holder, width, height)
-                            }
-
-                            override fun surfaceDestroyed(holder: SurfaceHolder) {
-                                mjpegPlayer.onSurfaceDestroyed()
-                            }
-                        })
-                    }
-                },
-                modifier = surfaceModifier.testTag("surface_player_view")
+                factory = { studioCameraState.primaryPreviewView },
+                modifier = mainCameraModifier.testTag("main_camera_preview")
             )
         }
 
-        // 2. Camera Preview (Full Screen, PiP or Split)
-        if (isCameraOnly) {
-            CameraPip(
-                front = cameraFront,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .testTag("camera_full_preview")
-            )
-        } else if (cameraLayout != CameraLayout.OFF) {
+        // 2. Secondary PiP View:
+        // - In USB mode: PiP displays the selected camera (cameraFront)
+        // - In Camera-only (no USB) mode: If user opts for PiP, PiP displays the OPPOSITE camera (!cameraFront)!
+        val showPip = if (attachedDeviceName != null) {
+            cameraLayout != CameraLayout.OFF
+        } else {
+            cameraLayout != CameraLayout.OFF && cameraLayout != CameraLayout.FULL_SCREEN
+        }
+
+        if (showPip) {
             val cornerShape = RoundedCornerShape(12.dp)
             val pipModifier = when (cameraLayout) {
                 CameraLayout.SPLIT_CAMERA_TOP -> Modifier
@@ -292,13 +322,38 @@ fun PlayerScreen(
                     .aspectRatio(cameraAspectRatio.ratio)
                     .clip(cornerShape)
                     .then(if (cameraBorder) Modifier.border(1.dp, Color.White, cornerShape) else Modifier)
-                CameraLayout.OFF -> Modifier
+                else -> Modifier
             }
 
-            CameraPip(
-                front = cameraFront,
-                modifier = pipModifier.testTag("camera_pip_preview")
-            )
+            Box(
+                modifier = pipModifier
+                    .background(Color(0xFF161B2C), cornerShape)
+                    .clipToBounds()
+            ) {
+                if (attachedDeviceName != null) {
+                    AndroidView(
+                        factory = { studioCameraState.secondaryPreviewView },
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .testTag("camera_pip_preview")
+                    )
+                } else {
+                    if (studioCameraState.isConcurrentSupported) {
+                        AndroidView(
+                            factory = { studioCameraState.secondaryPreviewView },
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .testTag("camera_pip_preview")
+                        )
+                    } else {
+                        DualCameraUnavailablePip(
+                            oppositeCameraFront = !cameraFront,
+                            onFlipCamera = onFlipCamera,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                }
+            }
         }
 
         // User PNG overlay: drag with one finger, pinch to resize (button 6 on the Remote toggles it)
@@ -314,58 +369,21 @@ fun PlayerScreen(
         // Real-time HUD Performance Stats Overlay
         StatsOverlay(
             stats = stats,
-            resolution = if (isCameraOnly) "DEVICE CAMERA" else "${currentQualityMode.targetWidth}x${currentQualityMode.targetHeight}",
+            resolution = if (attachedDeviceName != null) {
+                "${currentQualityMode.targetWidth}x${currentQualityMode.targetHeight}"
+            } else {
+                if (cameraLayout != CameraLayout.OFF && studioCameraState.isConcurrentSupported) {
+                    "DUAL CAM: ${if (cameraFront) "FRONT+BACK" else "BACK+FRONT"}"
+                } else {
+                    "CAMERA: ${if (cameraFront) "FRONT" else "BACK"}"
+                }
+            },
             isVisible = isStatsOverlayVisible,
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .statusBarsPadding()
                 .padding(top = 16.dp, end = 16.dp)
         )
-
-        // Offer to switch to capture mode banner in Camera-only mode
-        if (isCameraOnly && attachedDeviceName != null) {
-            Surface(
-                color = Color(0xFF1E3A8A).copy(alpha = 0.95f),
-                shape = RoundedCornerShape(14.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF60A5FA)),
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .statusBarsPadding()
-                    .padding(top = 64.dp)
-                    .testTag("switch_to_capture_banner")
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.SettingsInputHdmi,
-                        contentDescription = null,
-                        tint = Color(0xFF93C5FD),
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "Capture card attached",
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            color = Color.White,
-                            fontWeight = FontWeight.Bold
-                        )
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Button(
-                        onClick = onSwitchToCaptureMode,
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB)),
-                        modifier = Modifier
-                            .height(28.dp)
-                            .testTag("switch_to_capture_button"),
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp)
-                    ) {
-                        Text("Switch to Capture", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
-        }
 
         // Top Controls Overlay
         AnimatedVisibility(
@@ -427,27 +445,35 @@ fun PlayerScreen(
                         Surface(
                             color = Color(0xFF1E293B).copy(alpha = 0.9f),
                             shape = RoundedCornerShape(20.dp),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF3B82F6)),
-                            modifier = Modifier.clickable {
-                                if (!isCameraOnly) {
-                                    showQualitySheet = true
-                                    userTouchTimestamp = System.currentTimeMillis()
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.dp,
+                                if (attachedDeviceName != null) Color(0xFF3B82F6) else Color(0xFF10B981)
+                            ),
+                            modifier = Modifier
+                                .clickable {
+                                    if (attachedDeviceName != null) {
+                                        showQualitySheet = true
+                                        userTouchTimestamp = System.currentTimeMillis()
+                                    } else {
+                                        onFlipCamera()
+                                        userTouchTimestamp = System.currentTimeMillis()
+                                    }
                                 }
-                            }
+                                .testTag("player_mode_pill")
                         ) {
                             Row(
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Icon(
-                                    imageVector = if (isCameraOnly) Icons.Default.Cameraswitch else Icons.Default.Videocam,
-                                    contentDescription = null,
-                                    tint = Color(0xFF60A5FA),
+                                    imageVector = if (attachedDeviceName != null) Icons.Default.Videocam else Icons.Default.Cameraswitch,
+                                    contentDescription = if (attachedDeviceName != null) "Quality mode" else "Flip Camera Lens",
+                                    tint = if (attachedDeviceName != null) Color(0xFF60A5FA) else Color(0xFF34D399),
                                     modifier = Modifier.size(16.dp)
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
-                                    text = if (isCameraOnly) "CAMERA ONLY" else currentQualityMode.label,
+                                    text = if (attachedDeviceName != null) currentQualityMode.label else "CAMERA: ${if (cameraFront) "FRONT" else "BACK"}",
                                     style = MaterialTheme.typography.labelMedium.copy(
                                         color = Color.White,
                                         fontWeight = FontWeight.Bold
@@ -496,126 +522,124 @@ fun PlayerScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        // Fit/Fill quick button (only in capture mode)
-                        if (!isCameraOnly) {
+                        // Fit/Fill quick button
+                        IconButton(
+                            onClick = {
+                                onToggleScaleMode()
+                                userTouchTimestamp = System.currentTimeMillis()
+                            },
+                            modifier = Modifier
+                                .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                                .testTag("toggle_scale_mode_button")
+                        ) {
+                            Icon(
+                                imageVector = if (scaleMode == ScaleMode.FIT) Icons.Default.AspectRatio else Icons.Default.FitScreen,
+                                contentDescription = if (scaleMode == ScaleMode.FIT) "Fit Letterbox" else "Fill Screen",
+                                tint = if (scaleMode == ScaleMode.FILL) Color(0xFF60A5FA) else Color.White,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+
+                        // Camera layout cycling button
+                        IconButton(
+                            onClick = {
+                                onCycleCameraLayout()
+                                userTouchTimestamp = System.currentTimeMillis()
+                            },
+                            modifier = Modifier
+                                .background(
+                                    if (cameraLayout != CameraLayout.OFF) Color(0xFF1E3A8A).copy(alpha = 0.8f) else Color.Black.copy(alpha = 0.5f),
+                                    CircleShape
+                                )
+                                .testTag("toggle_camera_layout_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.PictureInPictureAlt,
+                                contentDescription = "Camera layout: ${cameraLayout.label}",
+                                tint = if (cameraLayout != CameraLayout.OFF) Color(0xFF93C5FD) else Color.White,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+
+                        // Quick buttons for Size, Aspect Ratio, and Border when PiP is active
+                        if (cameraLayout != CameraLayout.OFF && !cameraLayout.isSplit && cameraLayout != CameraLayout.FULL_SCREEN) {
                             IconButton(
                                 onClick = {
-                                    onToggleScaleMode()
+                                    onCycleCameraPipSize()
                                     userTouchTimestamp = System.currentTimeMillis()
                                 },
                                 modifier = Modifier
                                     .background(Color.Black.copy(alpha = 0.5f), CircleShape)
-                                    .testTag("toggle_scale_mode_button")
+                                    .testTag("toggle_camera_pip_size_button")
                             ) {
                                 Icon(
-                                    imageVector = if (scaleMode == ScaleMode.FIT) Icons.Default.AspectRatio else Icons.Default.FitScreen,
-                                    contentDescription = if (scaleMode == ScaleMode.FIT) "Fit Letterbox" else "Fill Screen",
-                                    tint = if (scaleMode == ScaleMode.FILL) Color(0xFF60A5FA) else Color.White,
+                                    imageVector = Icons.Default.PhotoSizeSelectLarge,
+                                    contentDescription = "PiP size: ${cameraPipSize.label}",
+                                    tint = Color.White,
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
 
-                            // Camera layout cycling button
                             IconButton(
                                 onClick = {
-                                    onCycleCameraLayout()
+                                    onCycleCameraAspectRatio()
+                                    userTouchTimestamp = System.currentTimeMillis()
+                                },
+                                modifier = Modifier
+                                    .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                                    .testTag("toggle_camera_aspect_ratio_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Crop,
+                                    contentDescription = "Aspect ratio: ${cameraAspectRatio.label}",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+
+                            IconButton(
+                                onClick = {
+                                    onToggleCameraBorder()
                                     userTouchTimestamp = System.currentTimeMillis()
                                 },
                                 modifier = Modifier
                                     .background(
-                                        if (cameraLayout != CameraLayout.OFF) Color(0xFF1E3A8A).copy(alpha = 0.8f) else Color.Black.copy(alpha = 0.5f),
+                                        if (cameraBorder) Color(0xFF1E3A8A).copy(alpha = 0.8f) else Color.Black.copy(alpha = 0.5f),
                                         CircleShape
                                     )
-                                    .testTag("toggle_camera_layout_button")
+                                    .testTag("toggle_camera_border_button")
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.PictureInPictureAlt,
-                                    contentDescription = "Camera layout: ${cameraLayout.label}",
-                                    tint = if (cameraLayout != CameraLayout.OFF) Color(0xFF93C5FD) else Color.White,
+                                    imageVector = Icons.Default.BorderStyle,
+                                    contentDescription = if (cameraBorder) "Border: ON" else "Border: OFF",
+                                    tint = if (cameraBorder) Color(0xFF93C5FD) else Color.White,
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
+                        }
 
-                            // Quick buttons for Size, Aspect Ratio, and Border when PiP is active
-                            if (cameraLayout != CameraLayout.OFF && !cameraLayout.isSplit) {
-                                IconButton(
-                                    onClick = {
-                                        onCycleCameraPipSize()
-                                        userTouchTimestamp = System.currentTimeMillis()
-                                    },
-                                    modifier = Modifier
-                                        .background(Color.Black.copy(alpha = 0.5f), CircleShape)
-                                        .testTag("toggle_camera_pip_size_button")
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.PhotoSizeSelectLarge,
-                                        contentDescription = "PiP size: ${cameraPipSize.label}",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
-
-                                IconButton(
-                                    onClick = {
-                                        onCycleCameraAspectRatio()
-                                        userTouchTimestamp = System.currentTimeMillis()
-                                    },
-                                    modifier = Modifier
-                                        .background(Color.Black.copy(alpha = 0.5f), CircleShape)
-                                        .testTag("toggle_camera_aspect_ratio_button")
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Crop,
-                                        contentDescription = "Aspect ratio: ${cameraAspectRatio.label}",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
-
-                                IconButton(
-                                    onClick = {
-                                        onToggleCameraBorder()
-                                        userTouchTimestamp = System.currentTimeMillis()
-                                    },
-                                    modifier = Modifier
-                                        .background(
-                                            if (cameraBorder) Color(0xFF1E3A8A).copy(alpha = 0.8f) else Color.Black.copy(alpha = 0.5f),
-                                            CircleShape
-                                        )
-                                        .testTag("toggle_camera_border_button")
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.BorderStyle,
-                                        contentDescription = if (cameraBorder) "Border: ON" else "Border: OFF",
-                                        tint = if (cameraBorder) Color(0xFF93C5FD) else Color.White,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
-                            }
-
-                            // Camera settings sheet button
-                            if (cameraLayout != CameraLayout.OFF) {
-                                IconButton(
-                                    onClick = {
-                                        showCameraSheet = true
-                                        userTouchTimestamp = System.currentTimeMillis()
-                                    },
-                                    modifier = Modifier
-                                        .background(Color.Black.copy(alpha = 0.5f), CircleShape)
-                                        .testTag("open_camera_settings_sheet_button")
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Tune,
-                                        contentDescription = "Camera settings",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
+                        // Camera settings sheet button
+                        if (cameraLayout != CameraLayout.OFF) {
+                            IconButton(
+                                onClick = {
+                                    showCameraSheet = true
+                                    userTouchTimestamp = System.currentTimeMillis()
+                                },
+                                modifier = Modifier
+                                    .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                                    .testTag("open_camera_settings_sheet_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Tune,
+                                    contentDescription = "Camera settings",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
                             }
                         }
 
-                        // Flip camera button (shown when layout is not OFF, or in camera-only mode)
-                        if (cameraLayout != CameraLayout.OFF || isCameraOnly) {
+                        // Flip camera button (shown when layout is not OFF)
+                        if (cameraLayout != CameraLayout.OFF) {
                             IconButton(
                                 onClick = {
                                     onFlipCamera()
@@ -735,18 +759,21 @@ fun PlayerScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            // Quality button (capture mode only)
-                            if (!isCameraOnly) {
-                                ControlBarPill(
-                                    icon = Icons.Default.Videocam,
-                                    label = currentQualityMode.id.uppercase(),
-                                    onClick = {
+                            // Quality / Camera Lens button
+                            ControlBarPill(
+                                icon = if (attachedDeviceName != null) Icons.Default.Videocam else Icons.Default.Cameraswitch,
+                                label = if (attachedDeviceName != null) currentQualityMode.id.uppercase() else if (cameraFront) "FRONT" else "BACK",
+                                onClick = {
+                                    if (attachedDeviceName != null) {
                                         showQualitySheet = true
                                         userTouchTimestamp = System.currentTimeMillis()
-                                    },
-                                    tag = "open_quality_sheet_button"
-                                )
-                            }
+                                    } else {
+                                        onFlipCamera()
+                                        userTouchTimestamp = System.currentTimeMillis()
+                                    }
+                                },
+                                tag = "open_quality_sheet_button"
+                            )
 
                             // Audio button
                             ControlBarPill(
@@ -760,33 +787,41 @@ fun PlayerScreen(
                                 tag = "open_audio_sheet_button"
                             )
 
-                            // Fit / Fill toggle button (capture mode only)
-                            if (!isCameraOnly) {
-                                ControlBarPill(
-                                    icon = if (scaleMode == ScaleMode.FIT) Icons.Default.AspectRatio else Icons.Default.FitScreen,
-                                    label = if (scaleMode == ScaleMode.FIT) "FIT" else "FILL",
-                                    isActive = scaleMode == ScaleMode.FILL,
-                                    onClick = {
-                                        onToggleScaleMode()
-                                        userTouchTimestamp = System.currentTimeMillis()
-                                    },
-                                    tag = "bar_fit_fill_toggle"
-                                )
-                            }
+                            // Fit / Fill toggle button
+                            ControlBarPill(
+                                icon = if (scaleMode == ScaleMode.FIT) Icons.Default.AspectRatio else Icons.Default.FitScreen,
+                                label = if (scaleMode == ScaleMode.FIT) "FIT" else "FILL",
+                                isActive = scaleMode == ScaleMode.FILL,
+                                onClick = {
+                                    onToggleScaleMode()
+                                    userTouchTimestamp = System.currentTimeMillis()
+                                },
+                                tag = "bar_fit_fill_toggle"
+                            )
 
                             // Camera settings pill
-                            if (!isCameraOnly) {
-                                ControlBarPill(
-                                    icon = Icons.Default.CameraAlt,
-                                    label = if (cameraLayout == CameraLayout.OFF) "CAM OFF" else "CAM ${cameraPipSize.label.uppercase()} ${cameraAspectRatio.label}",
-                                    isActive = cameraLayout != CameraLayout.OFF,
-                                    onClick = {
-                                        showCameraSheet = true
-                                        userTouchTimestamp = System.currentTimeMillis()
-                                    },
-                                    tag = "bar_camera_settings_toggle"
-                                )
-                            }
+                            ControlBarPill(
+                                icon = Icons.Default.CameraAlt,
+                                label = if (attachedDeviceName != null) {
+                                    when (cameraLayout) {
+                                        CameraLayout.OFF -> "CAM OFF"
+                                        CameraLayout.FULL_SCREEN -> "CAM FULL"
+                                        else -> "CAM ${cameraPipSize.label.uppercase()} ${cameraAspectRatio.label}"
+                                    }
+                                } else {
+                                    when (cameraLayout) {
+                                        CameraLayout.OFF -> "PIP OFF"
+                                        CameraLayout.FULL_SCREEN -> "PIP FULL"
+                                        else -> "PIP (${if (!cameraFront) "FRONT" else "BACK"})"
+                                    }
+                                },
+                                isActive = cameraLayout != CameraLayout.OFF,
+                                onClick = {
+                                    showCameraSheet = true
+                                    userTouchTimestamp = System.currentTimeMillis()
+                                },
+                                tag = "bar_camera_settings_toggle"
+                            )
 
                             // Stats HUD toggle button
                             ControlBarPill(
@@ -880,6 +915,7 @@ fun PlayerScreen(
                 cameraAspectRatio = cameraAspectRatio,
                 cameraBorder = cameraBorder,
                 cameraFront = cameraFront,
+                hasUsbCapture = attachedDeviceName != null,
                 isCameraOnly = isCameraOnly,
                 onSelectLayout = onSelectCameraLayout,
                 onSelectSize = onSelectCameraPipSize,

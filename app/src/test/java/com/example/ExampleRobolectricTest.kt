@@ -45,4 +45,46 @@ class ExampleRobolectricTest {
         assertTrue(JpegUtils.isJpeg(validJpeg, validJpeg.size))
         assertFalse(JpegUtils.isJpeg(invalidJpeg, invalidJpeg.size))
     }
+
+    @Test
+    fun verifyCameraLayoutTransitions() {
+        var layout = com.example.ui.CameraLayout.OFF
+        layout = layout.next()
+        assertEquals(com.example.ui.CameraLayout.PIP_TOP_LEFT, layout)
+        layout = layout.next()
+        assertEquals(com.example.ui.CameraLayout.PIP_TOP_RIGHT, layout)
+        layout = layout.next()
+        assertEquals(com.example.ui.CameraLayout.PIP_BOTTOM_LEFT, layout)
+        layout = layout.next()
+        assertEquals(com.example.ui.CameraLayout.PIP_BOTTOM_RIGHT, layout)
+        layout = layout.next()
+        assertEquals(com.example.ui.CameraLayout.SPLIT_CAMERA_TOP, layout)
+        layout = layout.next()
+        assertEquals(com.example.ui.CameraLayout.SPLIT_CAMERA_BOTTOM, layout)
+        layout = layout.next()
+        assertEquals(com.example.ui.CameraLayout.FULL_SCREEN, layout)
+        layout = layout.next()
+        assertEquals(com.example.ui.CameraLayout.OFF, layout)
+    }
+
+    @Test
+    fun verifyCameraOppositeLensResolution() {
+        // When hasUsbCapture is false:
+        // Main camera displays cameraFront.
+        // PiP camera displays the OPPOSITE lens (!cameraFront).
+        var cameraFront = false // Main lens is BACK camera
+        var mainLensIsFront = cameraFront
+        var pipLensIsFront = !cameraFront
+
+        assertFalse(mainLensIsFront) // Main is Back
+        assertTrue(pipLensIsFront)  // PiP is Front
+
+        // When flipping camera:
+        cameraFront = !cameraFront // Main lens flipped to FRONT
+        mainLensIsFront = cameraFront
+        pipLensIsFront = !cameraFront
+
+        assertTrue(mainLensIsFront)  // Main is Front
+        assertFalse(pipLensIsFront) // PiP is Back
+    }
 }

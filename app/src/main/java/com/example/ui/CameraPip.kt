@@ -2,12 +2,15 @@ package com.example.ui
 
 import android.Manifest
 import android.app.Activity
+import android.content.Context
 import android.content.pm.PackageManager
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.ConcurrentCamera
 import androidx.camera.core.Preview
+import androidx.camera.core.UseCaseGroup
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
@@ -21,6 +24,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.VideocamOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -41,6 +45,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -91,156 +96,217 @@ enum class CameraAspectRatio(
     }
 }
 
-@Composable
-fun CameraPip(
-    front: Boolean,
-    modifier: Modifier = Modifier
+/**
+ * Manages CameraX bindings for both primary (full screen) and secondary (PiP) cameras.
+ * Supports concurrent dual-camera streaming on capable hardware, and falls back gracefully.
+ */
+class StudioCameraState(
+    val context: Context,
+    val lifecycleOwner: LifecycleOwner?
 ) {
+    var isConcurrentSupported by mutableStateOf(false)
+        private set
+    var cameraFailed by mutableStateOf(false)
+        private set
+
+    val primaryPreviewView = PreviewView(context).apply {
+        implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+        scaleType = PreviewView.ScaleType.FILL_CENTER
+    }
+
+    val secondaryPreviewView = PreviewView(context).apply {
+        implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+        scaleType = PreviewView.ScaleType.FILL_CENTER
+    }
+
+    fun updateBinding(
+        hasUsbCapture: Boolean,
+        mainFront: Boolean,
+        cameraLayout: CameraLayout
+    ) {
+        val owner = lifecycleOwner ?: return
+        val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
+        cameraProviderFuture.addListener({
+            try {
+                val cameraProvider = cameraProviderFuture.get()
+                cameraProvider.unbindAll()
+
+                if (hasUsbCapture) {
+                    // USB capture active: main background is USB video.
+                    // Camera is only bound if PiP is active.
+                    if (cameraLayout != CameraLayout.OFF) {
+                        val selector = if (mainFront) {
+                            if (cameraProvider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA)) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
+                        } else {
+                            if (cameraProvider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA)) CameraSelector.DEFAULT_BACK_CAMERA else CameraSelector.DEFAULT_FRONT_CAMERA
+                        }
+                        val preview = Preview.Builder().build()
+                        preview.setSurfaceProvider(secondaryPreviewView.surfaceProvider)
+                        cameraProvider.bindToLifecycle(owner, selector, preview)
+                    }
+                } else {
+                    // No USB capture: Camera is ALWAYS full-screen main.
+                    val primarySelector = if (mainFront) {
+                        if (cameraProvider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA)) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
+                    } else {
+                        if (cameraProvider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA)) CameraSelector.DEFAULT_BACK_CAMERA else CameraSelector.DEFAULT_FRONT_CAMERA
+                    }
+                    val primaryPreview = Preview.Builder().build()
+                    primaryPreview.setSurfaceProvider(primaryPreviewView.surfaceProvider)
+
+                    if (cameraLayout == CameraLayout.OFF || cameraLayout == CameraLayout.FULL_SCREEN) {
+                        // Single camera: only primary full screen
+                        cameraProvider.bindToLifecycle(owner, primarySelector, primaryPreview)
+                    } else {
+                        // PiP requested without USB: PiP must be the OPPOSITE camera!
+                        val secondaryFront = !mainFront
+                        val secondarySelector = if (secondaryFront) {
+                            if (cameraProvider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA)) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
+                        } else {
+                            if (cameraProvider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA)) CameraSelector.DEFAULT_BACK_CAMERA else CameraSelector.DEFAULT_FRONT_CAMERA
+                        }
+
+                        val hasConcurrent = checkConcurrentSupport(cameraProvider, primarySelector, secondarySelector)
+                        isConcurrentSupported = hasConcurrent
+
+                        if (hasConcurrent) {
+                            val secondaryPreview = Preview.Builder().build()
+                            secondaryPreview.setSurfaceProvider(secondaryPreviewView.surfaceProvider)
+
+                            val primaryConfig = ConcurrentCamera.SingleCameraConfig(
+                                primarySelector,
+                                UseCaseGroup.Builder().addUseCase(primaryPreview).build(),
+                                owner
+                            )
+                            val secondaryConfig = ConcurrentCamera.SingleCameraConfig(
+                                secondarySelector,
+                                UseCaseGroup.Builder().addUseCase(secondaryPreview).build(),
+                                owner
+                            )
+                            cameraProvider.bindToLifecycle(listOf(primaryConfig, secondaryConfig))
+                        } else {
+                            // If hardware cannot run concurrent cameras, bind primary live
+                            cameraProvider.bindToLifecycle(owner, primarySelector, primaryPreview)
+                        }
+                    }
+                }
+                cameraFailed = false
+            } catch (e: Throwable) {
+                Log.e("StudioCameraState", "Failed to bind camera: ${e.message}", e)
+                cameraFailed = true
+            }
+        }, ContextCompat.getMainExecutor(context))
+    }
+
+    private fun checkConcurrentSupport(
+        provider: ProcessCameraProvider,
+        primary: CameraSelector,
+        secondary: CameraSelector
+    ): Boolean {
+        return try {
+            val concurrentList = provider.availableConcurrentCameraInfos
+            for (combination in concurrentList) {
+                val hasPrimary = primary.filter(combination).isNotEmpty()
+                val hasSecondary = secondary.filter(combination).isNotEmpty()
+                if (hasPrimary && hasSecondary) return true
+            }
+            false
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    fun release() {
+        try {
+            ProcessCameraProvider.getInstance(context).get().unbindAll()
+        } catch (_: Throwable) {
+        }
+    }
+}
+
+@Composable
+fun rememberStudioCameraState(
+    hasUsbCapture: Boolean,
+    mainFront: Boolean,
+    cameraLayout: CameraLayout
+): StudioCameraState {
     val context = LocalContext.current
     val activity = context as? Activity
     val lifecycleOwner = activity as? LifecycleOwner
 
-    var hasPermission by remember {
-        mutableStateOf(
-            ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.CAMERA
-            ) == PackageManager.PERMISSION_GRANTED
-        )
+    val state = remember(context, lifecycleOwner) {
+        StudioCameraState(context, lifecycleOwner)
     }
 
-    val launcher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        hasPermission = granted
+    LaunchedEffect(hasUsbCapture, mainFront, cameraLayout, lifecycleOwner) {
+        state.updateBinding(hasUsbCapture, mainFront, cameraLayout)
     }
 
-    LaunchedEffect(Unit) {
-        if (!hasPermission) {
-            launcher.launch(Manifest.permission.CAMERA)
+    DisposableEffect(state) {
+        onDispose {
+            state.release()
         }
     }
 
-    var cameraFailed by remember { mutableStateOf(false) }
+    return state
+}
 
+/**
+ * Fallback card shown in PiP when the hardware device does not support concurrent dual cameras.
+ */
+@Composable
+fun DualCameraUnavailablePip(
+    oppositeCameraFront: Boolean,
+    onFlipCamera: () -> Unit,
+    modifier: Modifier = Modifier
+) {
     Box(
         modifier = modifier
             .background(Color(0xFF161B2C))
             .clipToBounds()
-            .testTag("camera_pip_container"),
+            .testTag("dual_camera_unavailable_box"),
         contentAlignment = Alignment.Center
     ) {
-        if (!hasPermission) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.padding(6.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.VideocamOff,
-                    contentDescription = "Camera Permission Required",
-                    tint = Color(0xFFFCA5A5),
-                    modifier = Modifier.size(20.dp)
-                )
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = "Camera Permission",
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        color = Color.White,
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Button(
-                    onClick = { launcher.launch(Manifest.permission.CAMERA) },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFDC2626)),
-                    modifier = Modifier
-                        .height(24.dp)
-                        .testTag("grant_camera_pip_permission_button"),
-                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
-                ) {
-                    Text("Grant", fontSize = 9.sp)
-                }
-            }
-        } else if (cameraFailed) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.padding(6.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.CameraAlt,
-                    contentDescription = "Camera Unavailable",
-                    tint = Color(0xFF94A3B8),
-                    modifier = Modifier.size(20.dp)
-                )
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = "Camera Unavailable",
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        color = Color(0xFFCBD5E1),
-                        fontSize = 9.sp
-                    )
-                )
-            }
-        } else {
-            AndroidView(
-                factory = { ctx ->
-                    PreviewView(ctx).apply {
-                        implementationMode = PreviewView.ImplementationMode.COMPATIBLE
-                        scaleType = PreviewView.ScaleType.FILL_CENTER
-                    }
-                },
-                update = { previewView ->
-                    if (lifecycleOwner != null) {
-                        try {
-                            val cameraProviderFuture = ProcessCameraProvider.getInstance(previewView.context)
-                            cameraProviderFuture.addListener({
-                                try {
-                                    val cameraProvider = cameraProviderFuture.get()
-                                    cameraProvider.unbindAll()
-
-                                    val preview = Preview.Builder().build()
-                                    preview.setSurfaceProvider(previewView.surfaceProvider)
-
-                                    val selector = if (front) {
-                                        if (cameraProvider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA)) {
-                                            CameraSelector.DEFAULT_FRONT_CAMERA
-                                        } else {
-                                            CameraSelector.DEFAULT_BACK_CAMERA
-                                        }
-                                    } else {
-                                        if (cameraProvider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA)) {
-                                            CameraSelector.DEFAULT_BACK_CAMERA
-                                        } else {
-                                            CameraSelector.DEFAULT_FRONT_CAMERA
-                                        }
-                                    }
-
-                                    cameraProvider.bindToLifecycle(lifecycleOwner, selector, preview)
-                                    cameraFailed = false
-                                } catch (e: Throwable) {
-                                    Log.e("CameraPip", "Failed to bind CameraX preview: ${e.message}", e)
-                                    cameraFailed = true
-                                }
-                            }, ContextCompat.getMainExecutor(previewView.context))
-                        } catch (e: Throwable) {
-                            Log.e("CameraPip", "ProcessCameraProvider error: ${e.message}", e)
-                            cameraFailed = true
-                        }
-                    }
-                },
-                modifier = Modifier
-                    .fillMaxSize()
-                    .testTag("camerax_preview_view")
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(10.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.Cameraswitch,
+                contentDescription = null,
+                tint = Color(0xFF60A5FA),
+                modifier = Modifier.size(24.dp)
             )
-
-            DisposableEffect(front, lifecycleOwner) {
-                onDispose {
-                    try {
-                        ProcessCameraProvider.getInstance(context).get().unbindAll()
-                    } catch (_: Throwable) {
-                    }
-                }
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = if (oppositeCameraFront) "Front Lens" else "Back Lens",
+                style = MaterialTheme.typography.labelSmall.copy(
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 11.sp
+                )
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = "Dual stream requires hardware concurrent cameras",
+                style = MaterialTheme.typography.bodySmall.copy(
+                    color = Color(0xFF94A3B8),
+                    fontSize = 9.sp,
+                    textAlign = TextAlign.Center
+                )
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Button(
+                onClick = onFlipCamera,
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB)),
+                modifier = Modifier.height(26.dp),
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+            ) {
+                Text(
+                    text = "Switch to ${if (oppositeCameraFront) "Front" else "Back"}",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold
+                )
             }
         }
     }

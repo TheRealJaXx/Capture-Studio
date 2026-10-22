@@ -46,7 +46,10 @@ class ExampleUnitTest {
         assertTrue(CameraLayout.SPLIT_CAMERA_BOTTOM.isSplit)
 
         assertEquals(CameraLayout.PIP_TOP_LEFT, CameraLayout.OFF.next())
-        assertEquals(CameraLayout.OFF, CameraLayout.SPLIT_CAMERA_BOTTOM.next())
+        assertEquals(CameraLayout.FULL_SCREEN, CameraLayout.SPLIT_CAMERA_BOTTOM.next())
+        assertEquals(CameraLayout.OFF, CameraLayout.FULL_SCREEN.next())
+    }
+
     @Test
     fun verifyShortcutConfig() {
         val enabledPages = com.example.net.ShortcutConfig.getEnabledPages()
