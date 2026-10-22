@@ -58,6 +58,16 @@ import androidx.compose.material.icons.filled.BorderStyle
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.Crop
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.VideocamOff
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.core.content.ContextCompat
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.PhotoSizeSelectLarge
 import androidx.compose.material.icons.filled.PictureInPictureAlt
@@ -65,7 +75,6 @@ import androidx.compose.material.icons.filled.SettingsInputHdmi
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.draw.clip
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -131,6 +140,9 @@ fun PlayerScreen(
     overlayWidth: Float = 0.3f,
     onOverlayTransformChanged: (Float, Float, Float) -> Unit = { _, _, _ -> },
     onPickOverlay: () -> Unit = {},
+    onToggleOverlay: () -> Unit = {},
+    onResetOverlayPosition: () -> Unit = {},
+    onClearOverlay: () -> Unit = {},
     cameraLayout: CameraLayout = CameraLayout.OFF,
     cameraFront: Boolean = false,
     cameraPipSize: CameraPipSize = CameraPipSize.LARGE,
@@ -152,11 +164,30 @@ fun PlayerScreen(
     val context = LocalContext.current
     val activity = context as? Activity
 
+    var hasCameraPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+
+    val requestCameraPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        hasCameraPermission = isGranted
+    }
+
     val studioCameraState = rememberStudioCameraState(
         hasUsbCapture = attachedDeviceName != null,
         mainFront = cameraFront,
-        cameraLayout = cameraLayout
+        cameraLayout = cameraLayout,
+        hasCameraPermission = hasCameraPermission
     )
+
+    LaunchedEffect(Unit) {
+        if (!hasCameraPermission && attachedDeviceName == null) {
+            requestCameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+        }
+    }
 
     BackHandler {
         onNavigateBack()
@@ -169,6 +200,7 @@ fun PlayerScreen(
     var showQualitySheet by remember { mutableStateOf(false) }
     var showAudioSheet by remember { mutableStateOf(false) }
     var showCameraSheet by remember { mutableStateOf(false) }
+    var showOverlaySheet by remember { mutableStateOf(false) }
 
     // Keep screen on and apply immersive fullscreen mode
     DisposableEffect(Unit) {
@@ -191,7 +223,7 @@ fun PlayerScreen(
 
     // Auto-hide controls after 4 seconds of inactivity
     LaunchedEffect(controlsVisible, userTouchTimestamp) {
-        if (controlsVisible && !showQualitySheet && !showAudioSheet) {
+        if (controlsVisible && !showQualitySheet && !showAudioSheet && !showCameraSheet && !showOverlaySheet) {
             delay(4000L)
             controlsVisible = false
         }
@@ -266,10 +298,119 @@ fun PlayerScreen(
                 else -> Modifier.fillMaxSize()
             }
 
-            AndroidView(
-                factory = { studioCameraState.primaryPreviewView },
-                modifier = mainCameraModifier.testTag("main_camera_preview")
-            )
+            if (!hasCameraPermission || studioCameraState.permissionDenied) {
+                Box(
+                    modifier = mainCameraModifier
+                        .background(Color(0xFF0A0F1D))
+                        .testTag("camera_permission_required_box"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF161B2C)),
+                        shape = RoundedCornerShape(20.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFF2563EB)),
+                        modifier = Modifier
+                            .padding(24.dp)
+                            .widthIn(max = 420.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(64.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFF1E3A8A)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CameraAlt,
+                                    contentDescription = null,
+                                    tint = Color(0xFF93C5FD),
+                                    modifier = Modifier.size(32.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                text = "Camera Permission Required",
+                                style = MaterialTheme.typography.titleMedium.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                ),
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "Enable camera permission to stream with your phone's camera lenses and overlays.",
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    color = Color(0xFF94A3B8),
+                                    fontSize = 12.sp,
+                                    textAlign = TextAlign.Center
+                                )
+                            )
+                            Spacer(modifier = Modifier.height(20.dp))
+                            Button(
+                                onClick = { requestCameraPermissionLauncher.launch(Manifest.permission.CAMERA) },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB)),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(48.dp)
+                                    .testTag("grant_camera_permission_button")
+                            ) {
+                                Text(
+                                    text = "Grant Camera Permission",
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                            }
+                        }
+                    }
+                }
+            } else if (studioCameraState.noCameraAvailable) {
+                Box(
+                    modifier = mainCameraModifier
+                        .background(Color(0xFF0A0F1D)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.padding(24.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.VideocamOff,
+                            contentDescription = null,
+                            tint = Color(0xFFEF4444),
+                            modifier = Modifier.size(48.dp)
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "No Camera Hardware Found",
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "Connect a USB capture card or test on a physical Android device with cameras.",
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                color = Color(0xFF94A3B8),
+                                textAlign = TextAlign.Center
+                            )
+                        )
+                    }
+                }
+            } else {
+                AndroidView(
+                    factory = { ctx ->
+                        (studioCameraState.primaryPreviewView.parent as? android.view.ViewGroup)?.removeView(studioCameraState.primaryPreviewView)
+                        studioCameraState.primaryPreviewView
+                    },
+                    modifier = mainCameraModifier.testTag("main_camera_preview")
+                )
+            }
         }
 
         // 2. Secondary PiP View:
@@ -332,7 +473,10 @@ fun PlayerScreen(
             ) {
                 if (attachedDeviceName != null) {
                     AndroidView(
-                        factory = { studioCameraState.secondaryPreviewView },
+                        factory = { ctx ->
+                            (studioCameraState.secondaryPreviewView.parent as? android.view.ViewGroup)?.removeView(studioCameraState.secondaryPreviewView)
+                            studioCameraState.secondaryPreviewView
+                        },
                         modifier = Modifier
                             .fillMaxSize()
                             .testTag("camera_pip_preview")
@@ -340,7 +484,10 @@ fun PlayerScreen(
                 } else {
                     if (studioCameraState.isConcurrentSupported) {
                         AndroidView(
-                            factory = { studioCameraState.secondaryPreviewView },
+                            factory = { ctx ->
+                                (studioCameraState.secondaryPreviewView.parent as? android.view.ViewGroup)?.removeView(studioCameraState.secondaryPreviewView)
+                                studioCameraState.secondaryPreviewView
+                            },
                             modifier = Modifier
                                 .fillMaxSize()
                                 .testTag("camera_pip_preview")
@@ -661,7 +808,7 @@ fun PlayerScreen(
                         // Choose the PNG overlay image
                         IconButton(
                             onClick = {
-                                onPickOverlay()
+                                showOverlaySheet = true
                                 userTouchTimestamp = System.currentTimeMillis()
                             },
                             modifier = Modifier
@@ -672,8 +819,8 @@ fun PlayerScreen(
                                 .testTag("pick_overlay_button")
                         ) {
                             Icon(
-                                imageVector = Icons.Default.Image,
-                                contentDescription = "PNG overlay",
+                                imageVector = Icons.Default.Layers,
+                                contentDescription = "Stream Overlay & Watermark",
                                 tint = if (overlayVisible && overlayUri != null) Color(0xFF93C5FD) else Color.White,
                                 modifier = Modifier.size(20.dp)
                             )
@@ -823,6 +970,22 @@ fun PlayerScreen(
                                 tag = "bar_camera_settings_toggle"
                             )
 
+                            // Overlay pill
+                            ControlBarPill(
+                                icon = Icons.Default.Layers,
+                                label = when {
+                                    overlayUri == null -> "+ OVERLAY"
+                                    overlayVisible -> "OVERLAY ON"
+                                    else -> "OVERLAY OFF"
+                                },
+                                isActive = overlayVisible && overlayUri != null,
+                                onClick = {
+                                    showOverlaySheet = true
+                                    userTouchTimestamp = System.currentTimeMillis()
+                                },
+                                tag = "bar_overlay_settings_toggle"
+                            )
+
                             // Stats HUD toggle button
                             ControlBarPill(
                                 icon = Icons.Default.BarChart,
@@ -924,6 +1087,22 @@ fun PlayerScreen(
                 onFlipCamera = onFlipCamera,
                 onDismiss = {
                     showCameraSheet = false
+                    userTouchTimestamp = System.currentTimeMillis()
+                }
+            )
+        }
+
+        // Overlay Settings Sheet
+        if (showOverlaySheet) {
+            OverlaySettingsSheet(
+                overlayUri = overlayUri,
+                overlayVisible = overlayVisible,
+                onPickOverlay = onPickOverlay,
+                onToggleOverlay = onToggleOverlay,
+                onResetPosition = onResetOverlayPosition,
+                onClearOverlay = onClearOverlay,
+                onDismiss = {
+                    showOverlaySheet = false
                     userTouchTimestamp = System.currentTimeMillis()
                 }
             )

@@ -7,6 +7,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.fillMaxSize
@@ -41,14 +42,14 @@ class MainActivity : ComponentActivity() {
         if (!cameraGranted) {
             Toast.makeText(
                 this,
-                "Camera permission is required for USB capture card video.",
+                "Camera permission is required for camera streaming and PiP.",
                 Toast.LENGTH_LONG
             ).show()
         }
     }
 
     private val pickOverlayLauncher = registerForActivityResult(
-        ActivityResultContracts.OpenDocument()
+        ActivityResultContracts.PickVisualMedia()
     ) { uri ->
         if (uri != null) {
             try {
@@ -186,7 +187,18 @@ class MainActivity : ComponentActivity() {
                                     viewModel.saveOverlayTransform(cx, cy, w)
                                 },
                                 onPickOverlay = {
-                                    pickOverlayLauncher.launch(arrayOf("image/*"))
+                                    pickOverlayLauncher.launch(
+                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                    )
+                                },
+                                onToggleOverlay = {
+                                    viewModel.toggleOverlay()
+                                },
+                                onResetOverlayPosition = {
+                                    viewModel.resetOverlayPosition()
+                                },
+                                onClearOverlay = {
+                                    viewModel.clearOverlay()
                                 },
                                 cameraLayout = uiState.cameraLayout,
                                 cameraFront = uiState.cameraFront,

@@ -97,6 +97,18 @@ enum class CameraAspectRatio(
 }
 
 /**
+ * Safely unwrap Context to retrieve the nearest LifecycleOwner.
+ */
+fun Context.findLifecycleOwner(): LifecycleOwner? {
+    var cur: Context? = this
+    while (cur is android.content.ContextWrapper) {
+        if (cur is LifecycleOwner) return cur
+        cur = cur.baseContext
+    }
+    return null
+}
+
+/**
  * Manages CameraX bindings for both primary (full screen) and secondary (PiP) cameras.
  * Supports concurrent dual-camera streaming on capable hardware, and falls back gracefully.
  */
@@ -108,14 +120,16 @@ class StudioCameraState(
         private set
     var cameraFailed by mutableStateOf(false)
         private set
+    var permissionDenied by mutableStateOf(false)
+        private set
+    var noCameraAvailable by mutableStateOf(false)
+        private set
 
     val primaryPreviewView = PreviewView(context).apply {
-        implementationMode = PreviewView.ImplementationMode.COMPATIBLE
         scaleType = PreviewView.ScaleType.FILL_CENTER
     }
 
     val secondaryPreviewView = PreviewView(context).apply {
-        implementationMode = PreviewView.ImplementationMode.COMPATIBLE
         scaleType = PreviewView.ScaleType.FILL_CENTER
     }
 
@@ -124,21 +138,45 @@ class StudioCameraState(
         mainFront: Boolean,
         cameraLayout: CameraLayout
     ) {
-        val owner = lifecycleOwner ?: return
+        val owner = lifecycleOwner ?: context.findLifecycleOwner() ?: return
+
+        // 1. Verify Camera Permission
+        val hasPermission = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.CAMERA
+        ) == PackageManager.PERMISSION_GRANTED
+
+        if (!hasPermission) {
+            permissionDenied = true
+            cameraFailed = true
+            return
+        }
+        permissionDenied = false
+
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
         cameraProviderFuture.addListener({
             try {
                 val cameraProvider = cameraProviderFuture.get()
                 cameraProvider.unbindAll()
 
+                val hasFront = try { cameraProvider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA) } catch (_: Throwable) { false }
+                val hasBack = try { cameraProvider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA) } catch (_: Throwable) { false }
+
+                if (!hasFront && !hasBack) {
+                    noCameraAvailable = true
+                    cameraFailed = true
+                    return@addListener
+                }
+                noCameraAvailable = false
+
                 if (hasUsbCapture) {
                     // USB capture active: main background is USB video.
                     // Camera is only bound if PiP is active.
                     if (cameraLayout != CameraLayout.OFF) {
                         val selector = if (mainFront) {
-                            if (cameraProvider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA)) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
+                            if (hasFront) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
                         } else {
-                            if (cameraProvider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA)) CameraSelector.DEFAULT_BACK_CAMERA else CameraSelector.DEFAULT_FRONT_CAMERA
+                            if (hasBack) CameraSelector.DEFAULT_BACK_CAMERA else CameraSelector.DEFAULT_FRONT_CAMERA
                         }
                         val preview = Preview.Builder().build()
                         preview.setSurfaceProvider(secondaryPreviewView.surfaceProvider)
@@ -147,43 +185,50 @@ class StudioCameraState(
                 } else {
                     // No USB capture: Camera is ALWAYS full-screen main.
                     val primarySelector = if (mainFront) {
-                        if (cameraProvider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA)) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
+                        if (hasFront) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
                     } else {
-                        if (cameraProvider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA)) CameraSelector.DEFAULT_BACK_CAMERA else CameraSelector.DEFAULT_FRONT_CAMERA
+                        if (hasBack) CameraSelector.DEFAULT_BACK_CAMERA else CameraSelector.DEFAULT_FRONT_CAMERA
                     }
                     val primaryPreview = Preview.Builder().build()
                     primaryPreview.setSurfaceProvider(primaryPreviewView.surfaceProvider)
 
-                    if (cameraLayout == CameraLayout.OFF || cameraLayout == CameraLayout.FULL_SCREEN) {
+                    if (cameraLayout == CameraLayout.OFF || cameraLayout == CameraLayout.FULL_SCREEN || !hasFront || !hasBack) {
                         // Single camera: only primary full screen
                         cameraProvider.bindToLifecycle(owner, primarySelector, primaryPreview)
+                        isConcurrentSupported = false
                     } else {
                         // PiP requested without USB: PiP must be the OPPOSITE camera!
-                        val secondaryFront = !mainFront
-                        val secondarySelector = if (secondaryFront) {
-                            if (cameraProvider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA)) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
+                        val secondarySelector = if (mainFront) {
+                            CameraSelector.DEFAULT_BACK_CAMERA
                         } else {
-                            if (cameraProvider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA)) CameraSelector.DEFAULT_BACK_CAMERA else CameraSelector.DEFAULT_FRONT_CAMERA
+                            CameraSelector.DEFAULT_FRONT_CAMERA
                         }
 
                         val hasConcurrent = checkConcurrentSupport(cameraProvider, primarySelector, secondarySelector)
                         isConcurrentSupported = hasConcurrent
 
                         if (hasConcurrent) {
-                            val secondaryPreview = Preview.Builder().build()
-                            secondaryPreview.setSurfaceProvider(secondaryPreviewView.surfaceProvider)
+                            try {
+                                val secondaryPreview = Preview.Builder().build()
+                                secondaryPreview.setSurfaceProvider(secondaryPreviewView.surfaceProvider)
 
-                            val primaryConfig = ConcurrentCamera.SingleCameraConfig(
-                                primarySelector,
-                                UseCaseGroup.Builder().addUseCase(primaryPreview).build(),
-                                owner
-                            )
-                            val secondaryConfig = ConcurrentCamera.SingleCameraConfig(
-                                secondarySelector,
-                                UseCaseGroup.Builder().addUseCase(secondaryPreview).build(),
-                                owner
-                            )
-                            cameraProvider.bindToLifecycle(listOf(primaryConfig, secondaryConfig))
+                                val primaryConfig = ConcurrentCamera.SingleCameraConfig(
+                                    primarySelector,
+                                    UseCaseGroup.Builder().addUseCase(primaryPreview).build(),
+                                    owner
+                                )
+                                val secondaryConfig = ConcurrentCamera.SingleCameraConfig(
+                                    secondarySelector,
+                                    UseCaseGroup.Builder().addUseCase(secondaryPreview).build(),
+                                    owner
+                                )
+                                cameraProvider.bindToLifecycle(listOf(primaryConfig, secondaryConfig))
+                            } catch (e: Throwable) {
+                                Log.w("StudioCameraState", "Concurrent camera binding failed, falling back to primary", e)
+                                isConcurrentSupported = false
+                                cameraProvider.unbindAll()
+                                cameraProvider.bindToLifecycle(owner, primarySelector, primaryPreview)
+                            }
                         } else {
                             // If hardware cannot run concurrent cameras, bind primary live
                             cameraProvider.bindToLifecycle(owner, primarySelector, primaryPreview)
@@ -228,17 +273,17 @@ class StudioCameraState(
 fun rememberStudioCameraState(
     hasUsbCapture: Boolean,
     mainFront: Boolean,
-    cameraLayout: CameraLayout
+    cameraLayout: CameraLayout,
+    hasCameraPermission: Boolean = true
 ): StudioCameraState {
     val context = LocalContext.current
-    val activity = context as? Activity
-    val lifecycleOwner = activity as? LifecycleOwner
+    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
 
     val state = remember(context, lifecycleOwner) {
         StudioCameraState(context, lifecycleOwner)
     }
 
-    LaunchedEffect(hasUsbCapture, mainFront, cameraLayout, lifecycleOwner) {
+    LaunchedEffect(hasUsbCapture, mainFront, cameraLayout, hasCameraPermission, lifecycleOwner) {
         state.updateBinding(hasUsbCapture, mainFront, cameraLayout)
     }
 

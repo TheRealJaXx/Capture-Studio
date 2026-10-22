@@ -892,6 +892,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(overlayCx = cx, overlayCy = cy, overlayWidth = width) }
     }
 
+    fun clearOverlay() {
+        prefs.edit().remove("pref_overlay_uri").putBoolean("pref_overlay_visible", false).apply()
+        _uiState.update { it.copy(overlayUri = null, overlayVisible = false) }
+    }
+
+    fun resetOverlayPosition() {
+        saveOverlayTransform(0.5f, 0.5f, 0.35f)
+    }
+
     fun dismissFeedbackWarning() {
         _uiState.update { it.copy(feedbackWarningVisible = false) }
     }
